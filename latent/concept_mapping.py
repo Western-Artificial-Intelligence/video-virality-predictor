@@ -1,0 +1,1 @@
+#map latent dims to human concepts (via CLIP text prompts or portotypes)

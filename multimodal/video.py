@@ -1,0 +1,1 @@
+#CLIP extractor + pooling

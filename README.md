@@ -7,10 +7,11 @@ Project Overview: This project aims to develop an AI-driven system that identifi
  2) Latent structure discovery: reduce dimensionality of represented types into indiviudal latent spaces to identify driving characteristic for virality in purest form
  3) Virality Structure Forecasting: use structure disovery as basis of virality forecasting via supervised learning models 
 
- Setting up environment: Add all code dependencies into requirements.txt file so environemnt setup can be as easy as using that file to download nessecary libraries
+ Environment: Add all code dependencies into requirements.txt file so environemnt setup can be as easy as using that file to download nessecary libraries
 
  Repo standards: Just keep file names & folders organized/named accordingly and I will be a happy man
 
  Lettuce Meet Link: https://lettucemeet.com/l/G2vdw
  
+
 

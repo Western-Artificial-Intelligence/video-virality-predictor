@@ -10,8 +10,7 @@ Project Overview: This project aims to develop an AI-driven system that identifi
  Environment: Add all code dependencies into requirements.txt file so environemnt setup can be as easy as using that file to download nessecary libraries
 
  Repo standards: Just keep file names & folders organized/named accordingly and I will be a happy man
-
- Lettuce Meet Link: https://lettucemeet.com/l/G2vdw
  
+
 
 

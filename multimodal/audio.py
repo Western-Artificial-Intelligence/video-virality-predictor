@@ -1,1 +1,0 @@
-#OpenL3 Extractor + Pooling

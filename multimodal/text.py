@@ -1,1 +1,0 @@
-#CLIP-text / sentence transformer

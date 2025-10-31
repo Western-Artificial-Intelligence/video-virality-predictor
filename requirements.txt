@@ -1,3 +1,4 @@
 #Please add all your dependencies in this file i beg you please please please 
 requests>=2.31.0
 python-dotenv>=1.0.0
+yt_dlp == 2025.10.22    #Data/Videos/download_video.py

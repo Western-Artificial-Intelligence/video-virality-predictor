@@ -1,2 +1,3 @@
 Data/Links/__pycache__
 Data/Links/credentials.py
+credentials.py*.env

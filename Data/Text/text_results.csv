@@ -1,0 +1,27 @@
+url,query,transcript,polarity,subjectivity,begin_emotion,middle_emotion,end_emotion,people_mentioned,orgs_mentioned,locations_mentioned,events_mentioned,products_mentioned
+https://www.youtube.com/shorts/apNm0EW5KHc,funny Shorts,"What's yellow and can't swim?
+Some sort of duck?
+A bus full of children?
+Oh no! That's horrible!
+Oh my god!
+No, Jayla, I'm sweat!
+Mom, what did Michael Jackson say to the Jewish girl?
+What?
+Anna, you're okay.
+You're okay.
+Annie, are you okay?
+You're ignorant, like the girl in the booth.
+Hey mom, why are priests terrible at racing?
+At racing?
+Yeah.
+I don't know.
+Because they always come in a little behind.
+Oh my god.
+God, Brian.
+Hey mom, have you ever heard of the show Naked and Afraid?
+Yeah.
+Yeah, that show reminds me of a lot of playing hide and seek with my uncle.
+Say mama.
+Yes.
+What's a game that a white person always beats a black person in?
+Hangman.",-0.12111111111111111,0.4922222222222223,surprise,neutral,surprise,"['Michael Jackson', 'Anna', 'Annie', 'Brian', 'Hangman']",[],[],[],[]

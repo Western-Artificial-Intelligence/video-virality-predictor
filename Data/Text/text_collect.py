@@ -87,16 +87,20 @@ def collect_data(transcript):
     
     #Emotion(Direction)
     print("Analyze emotions")
-    classifier = pipeline("text-classification", model="j-hartmann/emotion-english-distilroberta-base", top_k = 1)
+    classifier = pipeline("text-classification", model="j-hartmann/emotion-english-distilroberta-base", top_k = 1,truncation=True)
     
-    sentences = transcript.replace('!', '.').replace('?', '.').split('.')
-    sentences = [s.strip() for s in sentences if s.strip()]
-    third = len(sentences) // 3
-    beginning = ' '.join(sentences[:third])
-    middle = ' '.join(sentences[third:2*third])
-    end = ' '.join(sentences[2*third:])
-
-    begin_emotion = classifier(beginning)[0][0]['label']
+    words = transcript.split()
+    third = len(words) // 3
+    begin = ' '.join(words[:third])
+    middle = ' '.join(words[third:2*third])
+    end = ' '.join(words[2*third:])
+    
+    #max words to 400 so doens't hit token limit 
+    begin = ' '.join(begin.split()[:400])
+    middle = ' '.join(middle.split()[:400])
+    end = ' '.join(end.split()[:400])
+    
+    begin_emotion = classifier(begin)[0][0]['label']
     middle_emotion = classifier(middle)[0][0]['label']
     end_emotion = classifier(end)[0][0]['label']
 
@@ -125,8 +129,23 @@ def collect_data(transcript):
         "products_mentioned": products_mentioned
     }
 
+def save_to_csv(results, output_csv="text_results.csv", mode='w'):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    full_output_path = os.path.join(script_dir, output_csv)
+
+    fieldnames = ['url', 'query','transcript', 'polarity', 'subjectivity','begin_emotion', 'middle_emotion', 'end_emotion',"people_mentioned","orgs_mentioned","locations_mentioned","events_mentioned","products_mentioned"]
+
+    file_exists = os.path.exists(full_output_path)
+
+    with open(full_output_path, mode, newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if mode == 'w' or (mode == 'a' and not file_exists):
+            writer.writeheader()
+        writer.writerows(results)
+
+
 #full process
-def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_first=True):
+def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_first=False):
 
     if not check_api_key():
         return
@@ -136,14 +155,14 @@ def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_firs
     if test_first: #only for testing 
         videos = videos[:1]
 
-    results_before_CSV = []
+    count = 0
+    total = len(videos)
+    first_save = True
 
     for video in videos:
 
         url = video['url']
         query = video['query']
-
-        result = {'url': url, 'query': query}
 
         audio_file, download_success = download_audio(url)
         if not download_success:
@@ -156,31 +175,27 @@ def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_firs
             continue
 
         data = collect_data(transcript)
-        result.update(data)
-        results_before_CSV.append(result)
-        print(f"Processed video")
+        data['url'] = url
+        data['query'] = query
 
-    return results_before_CSV
+        mode = 'w' if first_save else 'a'
+        save_to_csv([data], output_csv="text_results.csv", mode=mode)
+        first_save = False
+
+        count += 1
+        print(f"Saved! ({count}/{total} completed)")
+
+    return count
 
 
-def save_to_csv(results, output_csv="text_results.csv"):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    full_output_path = os.path.join(script_dir, output_csv)
 
-    fieldnames = ['url', 'query','transcript', 'polarity', 'subjectivity','begin_emotion', 'middle_emotion', 'end_emotion',"people_mentioned","orgs_mentioned","locations_mentioned","events_mentioned","products_mentioned"]
-
-    with open(full_output_path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
-
-    print("Saved to CSV")
 
 
 def main():
     check_api_key()
-    results = collect_all(test_first=True)
-    save_to_csv(results)
+    results = collect_all()
+    print(f"Processing complete. Total videos processed: {results}")
+
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from textblob import TextBlob
 from transformers import pipeline
 import spacy
 
-#python -m spacy download en_core_web_sm 
+#need to run python -m spacy download en_core_web_sm !
 
 try:
     from credentials import OPENAI_API_KEY 
@@ -38,7 +38,7 @@ def download_audio(url, output_path="temp_audio_downloads"):
     os.makedirs(full_output_path, exist_ok=True)
 
     ydl_dowload_settings = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio',
         'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),  
     }
 
@@ -87,16 +87,20 @@ def collect_data(transcript):
     
     #Emotion(Direction)
     print("Analyze emotions")
-    classifier = pipeline("text-classification", model="j-hartmann/emotion-english-distilroberta-base", top_k = 1)
+    classifier = pipeline("text-classification", model="j-hartmann/emotion-english-distilroberta-base", top_k = 1,truncation=True)
     
-    sentences = transcript.replace('!', '.').replace('?', '.').split('.')
-    sentences = [s.strip() for s in sentences if s.strip()]
-    third = len(sentences) // 3
-    beginning = ' '.join(sentences[:third])
-    middle = ' '.join(sentences[third:2*third])
-    end = ' '.join(sentences[2*third:])
-
-    begin_emotion = classifier(beginning)[0][0]['label']
+    words = transcript.split()
+    third = len(words) // 3
+    begin = ' '.join(words[:third])
+    middle = ' '.join(words[third:2*third])
+    end = ' '.join(words[2*third:])
+    
+    #max words to 400 so doens't hit token limit 
+    begin = ' '.join(begin.split()[:400])
+    middle = ' '.join(middle.split()[:400])
+    end = ' '.join(end.split()[:400])
+    
+    begin_emotion = classifier(begin)[0][0]['label']
     middle_emotion = classifier(middle)[0][0]['label']
     end_emotion = classifier(end)[0][0]['label']
 
@@ -125,8 +129,23 @@ def collect_data(transcript):
         "products_mentioned": products_mentioned
     }
 
+def save_to_csv(results, output_csv="text_results.csv", mode='w'):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    full_output_path = os.path.join(script_dir, output_csv)
+
+    fieldnames = ['url', 'query','transcript', 'polarity', 'subjectivity','begin_emotion', 'middle_emotion', 'end_emotion',"people_mentioned","orgs_mentioned","locations_mentioned","events_mentioned","products_mentioned"]
+
+    file_exists = os.path.exists(full_output_path)
+
+    with open(full_output_path, mode, newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if mode == 'w' or (mode == 'a' and not file_exists):
+            writer.writeheader()
+        writer.writerows(results)
+
+
 #full process
-def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_first=True):
+def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_first=False):
 
     if not check_api_key():
         return
@@ -136,52 +155,61 @@ def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_firs
     if test_first: #only for testing 
         videos = videos[:1]
 
-    results_before_CSV = []
+    count = 0
+    total = len(videos)
+    first_save = True
 
     for video in videos:
 
         url = video['url']
         query = video['query']
 
-        result = {'url': url, 'query': query}
+        data = {
+            'url': url,
+            'query': query,
+            'transcript': '',
+            'polarity': 0,
+            'subjectivity': 0,
+            'begin_emotion': '',
+            'middle_emotion': '',
+            'end_emotion': '',
+            'people_mentioned': [],
+            'orgs_mentioned': [],
+            'locations_mentioned': [],
+            'events_mentioned': [],
+            'products_mentioned': []
+        }
 
         audio_file, download_success = download_audio(url)
         if not download_success:
-            print(f"Skipping {url} - download failed")
-            continue
+            print(f" Download failed - saving empty row")
+        else:
+            transcript, transcribe_success = get_transcript(audio_file)
+            if not transcribe_success or not transcript:
+                print(f"Transcription failed - saving empty row")
+            elif len(transcript.strip()) < 10:
+                word_count = len(transcript.strip().split())
+                print(f"Transcript too short ({word_count} words) - saving empty row")
+            else:
+                # Only collect data once it is valid 
+                data = collect_data(transcript)
+                data['url'] = url
+                data['query'] = query
 
-        transcript, transcribe_success = get_transcript(audio_file)
-        if not transcribe_success:
-            print(f"Skipping {url} - transcription failed")
-            continue
+        mode = 'w' if first_save else 'a'
+        save_to_csv([data], output_csv="text_results.csv", mode=mode)
+        first_save = False
 
-        data = collect_data(transcript)
-        result.update(data)
-        results_before_CSV.append(result)
-        print(f"Processed video")
+        count += 1
+        print(f"Saved! ({count}/{total} completed)")
 
-    return results_before_CSV
-
-
-def save_to_csv(results, output_csv="text_results.csv"):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    full_output_path = os.path.join(script_dir, output_csv)
-
-    fieldnames = ['url', 'query','transcript', 'polarity', 'subjectivity','begin_emotion', 'middle_emotion', 'end_emotion',"people_mentioned","orgs_mentioned","locations_mentioned","events_mentioned","products_mentioned"]
-
-    with open(full_output_path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
-
-    print("Saved to CSV")
+    return count
 
 
 def main():
     check_api_key()
-    results = collect_all(test_first=True)
-    save_to_csv(results)
-
+    results = collect_all()
+    print(f"Processing complete. Total videos processed: {results}")
 
 if __name__ == "__main__":
     main()

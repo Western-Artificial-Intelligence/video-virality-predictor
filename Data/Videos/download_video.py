@@ -40,7 +40,8 @@ def download_video(url: str, out_stem: Path):
     # dependency: ffmpeg
     ydl_opts = {
         "outtmpl": out_tpl,
-        "format": "bv*+ba/best",
+        "format": "bv*[height<=480]/bv*[height>=480]",  # video only with “closest to 480p” (e.g. 360p or 720p fallback)
+        #"format": "bv*[filesize<50M]/b[filesize<50M]",  # video-only <50MB
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,

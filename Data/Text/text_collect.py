@@ -6,7 +6,7 @@ from textblob import TextBlob
 from transformers import pipeline
 import spacy
 
-#python -m spacy download en_core_web_sm 
+#need to run python -m spacy download en_core_web_sm !
 
 try:
     from credentials import OPENAI_API_KEY 
@@ -38,7 +38,7 @@ def download_audio(url, output_path="temp_audio_downloads"):
     os.makedirs(full_output_path, exist_ok=True)
 
     ydl_dowload_settings = {
-        'format': 'bestaudio/best',
+        'format': 'bestaudio',
         'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),  
     }
 
@@ -164,19 +164,37 @@ def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_firs
         url = video['url']
         query = video['query']
 
+        data = {
+            'url': url,
+            'query': query,
+            'transcript': '',
+            'polarity': 0,
+            'subjectivity': 0,
+            'begin_emotion': '',
+            'middle_emotion': '',
+            'end_emotion': '',
+            'people_mentioned': [],
+            'orgs_mentioned': [],
+            'locations_mentioned': [],
+            'events_mentioned': [],
+            'products_mentioned': []
+        }
+
         audio_file, download_success = download_audio(url)
         if not download_success:
-            print(f"Skipping {url} - download failed")
-            continue
-
-        transcript, transcribe_success = get_transcript(audio_file)
-        if not transcribe_success:
-            print(f"Skipping {url} - transcription failed")
-            continue
-
-        data = collect_data(transcript)
-        data['url'] = url
-        data['query'] = query
+            print(f" Download failed - saving empty row")
+        else:
+            transcript, transcribe_success = get_transcript(audio_file)
+            if not transcribe_success or not transcript:
+                print(f"Transcription failed - saving empty row")
+            elif len(transcript.strip()) < 10:
+                word_count = len(transcript.strip().split())
+                print(f"Transcript too short ({word_count} words) - saving empty row")
+            else:
+                # Only collect data once it is valid 
+                data = collect_data(transcript)
+                data['url'] = url
+                data['query'] = query
 
         mode = 'w' if first_save else 'a'
         save_to_csv([data], output_csv="text_results.csv", mode=mode)
@@ -188,15 +206,10 @@ def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_firs
     return count
 
 
-
-
-
 def main():
     check_api_key()
     results = collect_all()
     print(f"Processing complete. Total videos processed: {results}")
-
-
 
 if __name__ == "__main__":
     main()

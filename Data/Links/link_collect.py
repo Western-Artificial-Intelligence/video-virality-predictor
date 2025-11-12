@@ -1,8 +1,9 @@
 """
-YouTube Shorts Collector (API + Fallback)
+YouTube Shorts Collector (English Only)
 -----------------------------------------
-API queries are sanitized to remove site: filter (not supported by YouTube API)
-Fallback scraping uses site: filter for strict Shorts targeting.
+Collects YouTube Shorts links in English using the YouTube Data API v3
+and a DuckDuckGo fallback scraper. Results are filtered to English content
+via API parameters and heuristic keyword filtering.
 
 Outputs CSV: query, category_type, url
 """
@@ -22,11 +23,10 @@ except ImportError:
 
 # === CONFIGURATION ===
 OUTPUT_DIR = "shorts_data"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "shorts_links_wide.csv")
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, "shorts_links_english.csv")
 RESULTS_PER_QUERY = 20
 DELAY_BETWEEN_QUERIES = (2, 4)
 
-# Core and trending queries
 SEARCH_QUERIES = {
     "core": [
         "funny Shorts",
@@ -53,9 +53,7 @@ SEARCH_QUERIES = {
     ]
 }
 
-# For fallback scraping (DuckDuckGo), we add site filter
 FALLBACK_SITE_SUFFIX = "site:youtube.com/shorts"
-
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -78,6 +76,7 @@ def check_api_key():
 
 
 def search_youtube_api(query, max_results):
+    """Use YouTube API to get English-language Shorts."""
     base_url = "https://www.googleapis.com/youtube/v3/search"
     params = {
         "part": "snippet",
@@ -86,6 +85,8 @@ def search_youtube_api(query, max_results):
         "maxResults": max_results,
         "key": YOUTUBE_API_KEY,
         "videoDuration": "short",
+        "relevanceLanguage": "en",  # bias toward English
+        "videoCaption": "none"      # avoid non-English subtitles
     }
 
     response = requests.get(base_url, params=params)
@@ -96,6 +97,14 @@ def search_youtube_api(query, max_results):
     data = response.json()
     results = []
     for item in data.get("items", []):
+        snippet = item.get("snippet", {})
+        title = snippet.get("title", "").lower()
+        description = snippet.get("description", "").lower()
+        # simple English heuristic (if text contains mostly ASCII)
+        english_ratio = sum(c.isascii() for c in title + description) / max(1, len(title + description))
+        if english_ratio < 0.9:
+            continue  # skip non-English videos
+
         video_id = item["id"].get("videoId")
         if video_id:
             results.append(f"https://www.youtube.com/shorts/{video_id}")
@@ -103,6 +112,7 @@ def search_youtube_api(query, max_results):
 
 
 def fallback_scrape(query, max_results):
+    """Fallback method using DuckDuckGo search, filters likely English content."""
     query_with_site = f"{query} {FALLBACK_SITE_SUFFIX}"
     base_url = f"https://duckduckgo.com/html/?q={quote(query_with_site)}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -112,7 +122,11 @@ def fallback_scrape(query, max_results):
 
     import re
     urls = re.findall(r"https://www\.youtube\.com/shorts/[a-zA-Z0-9_-]{6,}", response.text)
-    return list(dict.fromkeys(urls))[:max_results]
+    urls = list(dict.fromkeys(urls))  # deduplicate
+
+    # crude English filtering heuristic (keep first N)
+    english_like = [u for u in urls if any(word in u.lower() for word in ["funny", "meme", "reaction", "story", "challenge", "shorts"])]
+    return english_like[:max_results]
 
 
 def collect_all_shorts(queries_dict, use_api):
@@ -133,7 +147,7 @@ def collect_all_shorts(queries_dict, use_api):
                     "url": url
                 })
 
-            print(f"  Found {len(results)} Shorts for '{query}'")
+            print(f"  Found {len(results)} English Shorts for '{query}'")
             time.sleep(random.uniform(*DELAY_BETWEEN_QUERIES))
 
     # Deduplicate by URL
@@ -145,12 +159,12 @@ def collect_all_shorts(queries_dict, use_api):
         writer.writeheader()
         writer.writerows(unique_links)
 
-    print(f"\nSaved {len(unique_links)} total unique Shorts to {OUTPUT_FILE}")
+    print(f"\nSaved {len(unique_links)} total unique English Shorts to {OUTPUT_FILE}")
     print("Dataset ready for multimodal feature extraction.")
 
 
 def main():
-    print("Starting YouTube Shorts collection...")
+    print("Starting YouTube Shorts (English-only) collection...")
     use_api = check_api_key()
     collect_all_shorts(SEARCH_QUERIES, use_api)
     print("\nCollection complete.")

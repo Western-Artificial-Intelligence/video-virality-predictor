@@ -19,7 +19,7 @@ def check_api_key():
         return False
     return True
 
-def load_csv(csv_file="shorts_links_wide.csv"):
+def load_csv(csv_file="shorts_links_english.csv"):
     try:
         with open(csv_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -39,16 +39,14 @@ def download_audio(url, output_path="temp_audio_downloads"):
 
     ydl_dowload_settings = {
         'format': 'bestaudio',
-        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),  
+        'outtmpl': os.path.join(full_output_path, '%(title)s.%(ext)s'),  
     }
 
     try:
         ydl = yt_dlp.YoutubeDL(ydl_dowload_settings)
         print(f"Downloading audio from: {url}")
         info = ydl.extract_info(url, download=True)
-        title = info['title']
-        ext = info['ext'] 
-        audio_file = os.path.join(full_output_path, f"{title}.{ext}")
+        audio_file = ydl.prepare_filename(info)
 
         print(f"Downloaded audio to: {audio_file}")
         return audio_file, True
@@ -62,7 +60,7 @@ def get_transcript(audio_file):
         client = OpenAI(api_key=OPENAI_API_KEY)
         file = open(audio_file, "rb")
         transcript = client.audio.transcriptions.create(
-                model="gpt-4o-transcribe",
+                model="whisper-1",
                 file=file,
                 response_format="json"
             )
@@ -129,7 +127,7 @@ def collect_data(transcript):
         "products_mentioned": products_mentioned
     }
 
-def save_to_csv(results, output_csv="text_results.csv", mode='w'):
+def save_to_csv(results, output_csv, mode='w'):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     full_output_path = os.path.join(script_dir, output_csv)
 
@@ -145,7 +143,7 @@ def save_to_csv(results, output_csv="text_results.csv", mode='w'):
 
 
 #full process
-def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_first=False):
+def collect_all(input_csv="../Links/shorts_data/shorts_links_english.csv",test_first=False):
 
     if not check_api_key():
         return
@@ -197,7 +195,7 @@ def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_firs
                 data['query'] = query
 
         mode = 'w' if first_save else 'a'
-        save_to_csv([data], output_csv="text_results.csv", mode=mode)
+        save_to_csv([data], output_csv="text_results_english2.csv", mode=mode)
         first_save = False
 
         count += 1

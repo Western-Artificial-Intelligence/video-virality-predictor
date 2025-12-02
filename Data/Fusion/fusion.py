@@ -10,7 +10,7 @@ FUSED_DIM = 512 # dimension of fused embeddings (for now)
 #IMPORTS
 import torch, torch.nn as nn, numpy as np
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-load_emb = lambda p: torch.tensor(np.load(p), dtype=torch.float32) if p.endswith(".npy") else torch.load(p, map_location="cpu")
+load_emb = lambda p: torch.tensor(pd.read_parquet(p).values, dtype=torch.float32)
 
 #MLP Definition
 class MLP(nn.Module):
@@ -26,7 +26,7 @@ vid_mlp, aud_mlp, txt_mlp = MLP(video.shape[1],FUSED_DIM).to(DEVICE), MLP(audio.
 va_fuse, final_fuse = MLP(2*FUSED_DIM,FUSED_DIM).to(DEVICE), MLP(2*FUSED_DIM,FUSED_DIM).to(DEVICE)
 
 #Apply Simple MLPs to each modality and fuse
-v, a, t = vid_mlp(video), aud_mlp(audio), txt_mlp(text)
+v, a, t = vid_mlp(video), aud_mlp(audio), txt_mlp(text)  
 va = va_fuse(torch.cat([v,a],1))
 fused = final_fuse(torch.cat([va,t],1))
 

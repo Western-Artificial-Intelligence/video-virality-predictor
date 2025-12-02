@@ -2,7 +2,7 @@
 
 #MACROS
 VIDEO_EMB_PATH = "video-virality-predictor/Data/Embeddings/videomae_embeddings.npy"
-AUDIO_EMB_PATH = ""
+AUDIO_EMB_PATH = "video-virality-predictor/Data/Audio/audio_embeddings.npy"
 TEXT_EMB_PATH  = "video-virality-predictor/Data/Embeddings/Text_Embeddings/text_embeddings_meta_transcript_concat.npy"
 OUTPUT_PATH = "fused.pt"
 FUSED_DIM = 512 # dimension of fused embeddings (for now)
@@ -13,7 +13,13 @@ import torch.nn as nn
 import numpy as np
 import pandas as pd
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-load_emb = lambda p: torch.tensor(pd.read_parquet(p).values, dtype=torch.float32)
+
+def load_emb(path):
+    """Load embeddings from .npy or .parquet file."""
+    if path.endswith('.npy'):
+        return torch.tensor(np.load(path), dtype=torch.float32)
+    else:
+        return torch.tensor(pd.read_parquet(path).values, dtype=torch.float32)
 
 #MLP Definition
 class MLP(nn.Module):

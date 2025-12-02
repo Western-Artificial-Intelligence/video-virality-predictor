@@ -1,7 +1,7 @@
 # Fusing VA & VA + T embeddings using simple MLPs
 
 #MACROS
-VIDEO_EMB_PATH = ""
+VIDEO_EMB_PATH = "video-virality-predictor/Data/Embeddings/videomae_embeddings.npy"
 AUDIO_EMB_PATH = ""
 TEXT_EMB_PATH  = ""
 OUTPUT_PATH = "fused.pt"

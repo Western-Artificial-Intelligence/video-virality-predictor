@@ -3,7 +3,7 @@
 #MACROS
 VIDEO_EMB_PATH = "video-virality-predictor/Data/Embeddings/videomae_embeddings.npy"
 AUDIO_EMB_PATH = ""
-TEXT_EMB_PATH  = "video-virality-predictor/Data/Embeddings/Text_Embeddings/text_embeddings.npy"
+TEXT_EMB_PATH  = "video-virality-predictor/Data/Embeddings/Text_Embeddings/text_embeddings_meta_transcript_concat.npy"
 OUTPUT_PATH = "fused.pt"
 FUSED_DIM = 512 # dimension of fused embeddings (for now)
 

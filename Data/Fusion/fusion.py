@@ -8,7 +8,10 @@ OUTPUT_PATH = "fused.pt"
 FUSED_DIM = 512 # dimension of fused embeddings (for now)
 
 #IMPORTS
-import torch, torch.nn as nn, numpy as np
+import torch
+import torch.nn as nn
+import numpy as np
+import pandas as pd
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 load_emb = lambda p: torch.tensor(pd.read_parquet(p).values, dtype=torch.float32)
 

@@ -3,9 +3,9 @@ import pandas as pd
 
 # Paths are relative to the project root:
 # C:\CLIP Farming\video-virality-predictor\
-metadata_path = Path("Data/Metadata/shorts_metadata.csv")
-transcript_path = Path("Data/Text/text_results_english.csv")
-output_path = Path("Data/Embeddings/Text_Embeddings/final_text_inputs.parquet")
+metadata_path = Path("../../Metadata/shorts_metadata.csv")
+transcript_path = Path("../../Text/text_results_english.csv")
+output_path = Path("final_text_inputs.parquet")
 
 
 def build_meta_text(row) -> str:

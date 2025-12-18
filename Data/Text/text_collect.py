@@ -19,7 +19,7 @@ def check_api_key():
         return False
     return True
 
-def load_csv(csv_file="shorts_links_english.csv"):
+def load_csv(csv_file="shorts_links_wide.csv"):
     try:
         with open(csv_file, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -143,7 +143,7 @@ def save_to_csv(results, output_csv, mode='w'):
 
 
 #full process
-def collect_all(input_csv="../Links/shorts_data/shorts_links_english.csv",test_first=False):
+def collect_all(input_csv="../Links/shorts_data/shorts_links_wide.csv",test_first=False):
 
     if not check_api_key():
         return

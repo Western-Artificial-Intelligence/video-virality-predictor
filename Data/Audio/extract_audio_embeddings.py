@@ -23,7 +23,7 @@ from transformers import Wav2Vec2Processor, Wav2Vec2Model
 
 AUDIO_DIR = "raw_audio"
 OUTPUT_CSV = "audio_embeddings.csv"
-LINKS_CSV = "../Links/shorts_data/shorts_links_wide.csv"
+LINKS_CSV = "../Links/shorts_data/shorts_links_english.csv"
 EMBEDDINGS_DIR = "embeddings"
 ERROR_LOG_FILE = "audio_embedding_errors.log"
 EMBEDDING_SIZE = 768

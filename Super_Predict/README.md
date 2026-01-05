@@ -76,14 +76,12 @@ This table is **external to this module** and typically comes from:
 
 **Required columns:**
 - `video_id` (must match `fused.pt`)
-- target column (name chosen by you)
+- target column 
 
 **Optional columns (automatically used if present):**
 - `cluster_id` (from Dev 2)
 - metadata (duration, post hour, language, etc.)
 - early engagement signals (views_1h, likes_1h, retention_30s, etc.)
-
-This design keeps Dev 3 **unblocked** while other parts evolve.
 
 ---
 

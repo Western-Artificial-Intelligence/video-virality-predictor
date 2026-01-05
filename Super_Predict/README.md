@@ -1,4 +1,4 @@
-# Dev 3 — Virality Prediction (Supervised)
+# Luke Jang — Virality Prediction (Supervised)
 
 This module implements the **first supervised learning layer** in the project. Its job is to take everything produced so far (multimodal embeddings, clusters, metadata, early signals) and output a **single predicted performance score per video**.
 

@@ -51,18 +51,18 @@ A channel‑level median of recent Shorts can be computed but is disabled by def
 **Usage**
 Basic run (horizon labels only):
 ```bash
-/Users/wkdghdus/Desktop/coding/clipfarm/.venv/bin/python3 Data/Metadata/daily_horizon_collector.py
+python Data/Metadata/daily_horizon_collector.py
 ```
 
 Low‑quota test run:
 ```bash
-/Users/wkdghdus/Desktop/coding/clipfarm/.venv/bin/python3 Data/Metadata/daily_horizon_collector.py \
+python Data/Metadata/daily_horizon_collector.py \
   --seed shorts --pages-per-query 1 --max-results 5 --sleep-seconds 0.1
 ```
 
 Enable channel median (higher quota cost):
 ```bash
-/Users/wkdghdus/Desktop/coding/clipfarm/.venv/bin/python3 Data/Metadata/daily_horizon_collector.py \
+python Data/Metadata/daily_horizon_collector.py \
   --channel-median-sample 25
 ```
 

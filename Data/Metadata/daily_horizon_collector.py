@@ -14,6 +14,7 @@ import time
 import random
 import sqlite3
 import requests
+import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,6 +65,10 @@ DEFAULT_MAX_RESULTS = 25
 # Default sleep between API calls to reduce quota spikes and rate limit risk.
 DEFAULT_SLEEP_SECONDS = 0.2
 
+# Default number of recent shorts to sample per channel when computing
+# channel_median_shorts_view_count. Set to 0 to disable extra API calls.
+DEFAULT_CHANNEL_MEDIAN_SAMPLE = 0
+
 # Seed queries for discovery when no seed file or overrides are provided.
 DEFAULT_SEEDS = [
     {"query": "shorts", "category_type": "seed"},
@@ -85,6 +90,7 @@ HORIZON_EXTRA_FIELDS = [
     "horizon_days",
     "horizon_view_count",
     "horizon_label_type",
+    "channel_median_shorts_view_count",
 ]
 
 
@@ -420,6 +426,79 @@ def fetch_channels_for_ids(channel_ids):
     return out
 
 
+# Fetch up to N recent shorts video IDs for a given channel using search.list.
+def fetch_channel_short_ids(channel_id: str, max_videos: int, sleep_seconds: float):
+    if not channel_id or max_videos <= 0:
+        return []
+
+    ids = []
+    page_token = None
+
+    while len(ids) < max_videos:
+        params = {
+            "part": "snippet",
+            "type": "video",
+            "channelId": channel_id,
+            "videoDuration": "short",
+            "order": "date",
+            "maxResults": min(50, max_videos - len(ids)),
+            "key": base.YOUTUBE_API_KEY,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+
+        resp = request_with_backoff(YT_SEARCH_URL, params)
+        if resp is None or resp.status_code != 200:
+            code = resp.status_code if resp is not None else "n/a"
+            print(f"WARNING: search.list failed for channel {channel_id} ({code})")
+            break
+
+        data = resp.json()
+        items = data.get("items", [])
+
+        for item in items:
+            vid = (item.get("id") or {}).get("videoId")
+            if vid:
+                ids.append(vid)
+
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+        time.sleep(sleep_seconds)
+
+    # Deduplicate while preserving order.
+    seen = set()
+    deduped = []
+    for vid in ids:
+        if vid in seen:
+            continue
+        seen.add(vid)
+        deduped.append(vid)
+
+    return deduped
+
+
+# Compute the median view count across recent shorts for a channel.
+def compute_channel_median_shorts_view_count(channel_id: str, max_videos: int, sleep_seconds: float):
+    short_ids = fetch_channel_short_ids(channel_id, max_videos, sleep_seconds)
+    if not short_ids:
+        return None
+
+    view_counts = []
+    for batch in base.chunked(short_ids, 50):
+        meta = fetch_metadata_for_ids(batch)
+        for item in meta.values():
+            v = item.get("view_count")
+            if v is not None:
+                view_counts.append(v)
+
+    if not view_counts:
+        return None
+
+    return statistics.median(view_counts)
+
+
 # Initialize the SQLite DB used to dedupe labels.
 def init_dedupe_db(path: Path):
     # Make sure the parent folder exists.
@@ -523,6 +602,7 @@ def main():
     parser.add_argument("--pages-per-query", type=int, default=DEFAULT_PAGES_PER_QUERY)
     parser.add_argument("--max-results", type=int, default=DEFAULT_MAX_RESULTS)
     parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_SLEEP_SECONDS)
+    parser.add_argument("--channel-median-sample", type=int, default=DEFAULT_CHANNEL_MEDIAN_SAMPLE)
     args = parser.parse_args()
 
     # Parse horizons list like "7,30" into [7, 30].
@@ -533,6 +613,8 @@ def main():
     pages_per_query = max(1, int(args.pages_per_query))
     max_results = max(1, min(50, int(args.max_results)))
     sleep_seconds = max(0.0, float(args.sleep_seconds))
+    channel_median_sample = max(0, int(args.channel_median_sample))
+    channel_median_enabled = channel_median_sample > 0
 
     # Resolve seed sources.
     seed_file = Path(args.seed_file) if args.seed_file else None
@@ -546,6 +628,7 @@ def main():
     print(f"Collector version: {base.COLLECTOR_VERSION}")
     print(f"Captured at: {captured_at_iso}")
     print(f"Horizons: {horizons} days (tolerance +/- {tolerance_days} days)")
+    print(f"Channel median shorts sample: {channel_median_sample}")
 
     # Map of video_id -> base discovery record.
     all_candidates = {}
@@ -602,6 +685,16 @@ def main():
     channel_ids = {m.get("channel_id") for m in all_meta.values() if m.get("channel_id")}
     channels = fetch_channels_for_ids(channel_ids)
 
+    # Optionally compute channel-level median shorts view counts.
+    channel_median_shorts = {}
+    if channel_median_enabled:
+        for cid in channel_ids:
+            if cid in channel_median_shorts:
+                continue
+            channel_median_shorts[cid] = compute_channel_median_shorts_view_count(
+                cid, channel_median_sample, sleep_seconds
+            )
+
     # Build rows and assign horizon labels.
     rows_to_write = []
     labeled_counts = {h: 0 for h in horizons}
@@ -617,6 +710,15 @@ def main():
         row = base.build_row(base_item, meta, chan, captured_at_iso)
         age_days = row.get("age_days")
         view_count = row.get("view_count")
+
+        # Attach channel median shorts view count if computed.
+        if channel_median_enabled:
+            row["channel_median_shorts_view_count"] = channel_median_shorts.get(
+                meta.get("channel_id", ""), None
+            )
+        else:
+            # If disabled, force all rows to NULL so the column is consistent.
+            row["channel_median_shorts_view_count"] = None
 
         # Skip rows missing key features needed for labeling.
         if age_days is None or view_count is None:

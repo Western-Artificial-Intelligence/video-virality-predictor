@@ -80,6 +80,36 @@ Inspect schedule:
 plutil -p ~/Library/LaunchAgents/com.clipfarm.horizon-collector.plist
 ```
 
+**Always-On Scheduling (GitHub Actions)**
+- Workflow file: `.github/workflows/horizon-collector.yml`
+- Trigger:
+  - Nightly cron (`07:30 UTC`, approximately `11:30 PM` Pacific; DST shifts by 1 hour)
+  - Manual run (`workflow_dispatch`)
+- Runtime behavior:
+  - Installs minimal collector dependency (`requests`)
+  - Writes `credentials.py` from GitHub secret `YOUTUBE_API_KEY`
+  - Runs `python Data/Metadata/daily_horizon_collector.py --channel-median-sample 0`
+
+**GitHub Secrets Required**
+- Always required:
+  - `YOUTUBE_API_KEY`
+- Required only for S3 persistence mode:
+  - `AWS_ACCESS_KEY_ID`
+  - `AWS_SECRET_ACCESS_KEY`
+  - `AWS_REGION`
+  - `S3_BUCKET`
+- Required only for GCS persistence mode:
+  - `GCP_SA_KEY_JSON`
+  - `GCS_BUCKET`
+
+**Persistence Modes**
+- The workflow supports three output persistence modes via `PERSIST_MODE` in `.github/workflows/horizon-collector.yml`:
+  - `repo` (default): commits `shorts_metadata_horizon.csv` and `horizon_labels.sqlite` back to git
+  - `s3`: uploads outputs to `s3://<S3_BUCKET>/metadata/`
+  - `gcs`: uploads outputs to `gs://<GCS_BUCKET>/metadata/`
+- To switch mode, edit:
+  - `PERSIST_MODE: repo` to `PERSIST_MODE: s3` or `PERSIST_MODE: gcs`
+
 **Quota Notes**
 - `search.list` is expensive (100 units per request). This affects discovery and channel median sampling.
 - `videos.list` and `channels.list` are cheaper and batched.

@@ -15,8 +15,8 @@ jobs:
     env:
       # Supported values: repo, s3, gcs
       PERSIST_MODE: repo
-      OUTPUT_CSV: Data/Metadata/shorts_metadata_horizon.csv
-      OUTPUT_DB: Data/Metadata/horizon_labels.sqlite
+      OUTPUT_CSV: Data/raw/Metadata/shorts_metadata_horizon.csv
+      OUTPUT_DB: Data/raw/Metadata/horizon_labels.sqlite
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
 
       - name: Run daily horizon collector
         run: |
-          python Data/Metadata/daily_horizon_collector.py --channel-median-sample 0
+          python Data/raw/Metadata/daily_horizon_collector.py --channel-median-sample 0
 
       - name: Commit output updates to repo
         if: env.PERSIST_MODE == 'repo'

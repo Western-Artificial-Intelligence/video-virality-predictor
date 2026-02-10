@@ -1,7 +1,7 @@
 import pandas as pd
 from virality_model import ViralityConfig, train_virality_model
 
-FUSED_PT = "video-virality-predictor/Data/Fusion/fused.pt"
+FUSED_PT = "video-virality-predictor/Data/common/fused.pt"
 TRAIN_CSV = "video-virality-predictor/Super_Predict/train.csv" 
 
 train = pd.read_csv(TRAIN_CSV)

@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 
 # Paths
-FUSED_PATH = "../Data/Fusion/fused.pt"
+FUSED_PATH = "../Data/common/fused.pt"
 # Cole's expected output path - we check for this first
 LATENT_PATH = "../Latence/latent.pt" 
 OUTPUT_CSV = "cluster_results.csv"

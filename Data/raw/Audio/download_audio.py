@@ -9,6 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
+from Data.common.cloud_sync import CloudUploader, maybe_delete_local  # noqa: E402
 from Data.common.horizon_delta import (  # noqa: E402
     DEFAULT_METADATA_CSV,
     ScriptStateDB,
@@ -53,6 +54,30 @@ def main() -> None:
     parser.add_argument("--audio_dir", default=str(DEFAULT_AUDIO_DIR))
     parser.add_argument("--max_items", type=int, default=0)
     parser.add_argument("--include_captured_at_in_hash", action="store_true")
+    parser.add_argument(
+        "--cloud_root_uri",
+        default="",
+        help="Cloud base URI for uploads (s3://bucket/prefix or gs://bucket/prefix)",
+    )
+    parser.add_argument("--cloud_video_prefix", default="video", help="Relative prefix under cloud_root_uri for video files")
+    parser.add_argument("--cloud_audio_prefix", default="audio", help="Relative prefix under cloud_root_uri for audio files")
+    parser.add_argument(
+        "--download_video_from_cloud_if_missing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If local mp4 is missing, try to fetch it from cloud_root_uri/cloud_video_prefix",
+    )
+    parser.add_argument(
+        "--cleanup_downloaded_video",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Delete temporary mp4 fetched from cloud after audio extraction",
+    )
+    parser.add_argument(
+        "--cloud_delete_local_after_upload",
+        action="store_true",
+        help="Delete local wav after successful cloud upload",
+    )
     args = parser.parse_args()
 
     video_dir = Path(args.video_dir)
@@ -60,6 +85,7 @@ def main() -> None:
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     state = ScriptStateDB(Path(args.state_db))
+    uploader = CloudUploader(args.cloud_root_uri)
 
     try:
         items = load_latest_horizon_rows(
@@ -82,17 +108,36 @@ def main() -> None:
                 continue
 
             video_path = video_dir / f"{item.video_id}.mp4"
+            downloaded_video = False
             if not video_path.exists():
-                state.upsert(item.video_id, item.source_hash, utc_now_iso(), "missing_video", "video_not_found")
-                missing_video += 1
-                continue
+                if uploader.enabled and args.download_video_from_cloud_if_missing:
+                    try:
+                        uploader.download_file(
+                            f"{args.cloud_video_prefix.strip('/')}/{item.video_id}.mp4",
+                            video_path,
+                        )
+                        downloaded_video = True
+                    except Exception:
+                        downloaded_video = False
+
+                if not video_path.exists():
+                    state.upsert(item.video_id, item.source_hash, utc_now_iso(), "missing_video", "video_not_found")
+                    missing_video += 1
+                    continue
 
             try:
                 extract_wav_from_video(video_path, wav_path)
+                if uploader.enabled:
+                    uploader.upload_file(wav_path, f"{args.cloud_audio_prefix.strip('/')}/{item.video_id}.wav")
+                    maybe_delete_local(wav_path, args.cloud_delete_local_after_upload)
+                if downloaded_video and args.cleanup_downloaded_video:
+                    maybe_delete_local(video_path, True)
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "success", "")
                 success += 1
             except Exception as exc:
-                state.upsert(item.video_id, item.source_hash, utc_now_iso(), "fail", str(exc))
+                err = str(exc)
+                status = "fail_cloud_upload" if "cloud" in err.lower() else "fail"
+                state.upsert(item.video_id, item.source_hash, utc_now_iso(), status, err)
                 failed += 1
 
         print("Audio extractor summary")
@@ -103,6 +148,8 @@ def main() -> None:
         print(f"missing_video: {missing_video}")
         print(f"failed: {failed}")
         print(f"output_dir: {audio_dir}")
+        if uploader.enabled:
+            print(f"cloud_root_uri: {args.cloud_root_uri}")
         print(f"state_db: {args.state_db}")
     finally:
         state.close()

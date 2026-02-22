@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
-DEFAULT_METADATA_CSV = Path("Data/raw/Metadata/shorts_metadata_horizon.csv")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_METADATA_CSV = REPO_ROOT / "Data" / "raw" / "Metadata" / "shorts_metadata_horizon.csv"
 DEFAULT_URL_COLUMNS = ("video_url", "url", "youtube_url")
 
 YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -137,6 +138,8 @@ def load_latest_horizon_rows(
     include_captured_at_in_hash: bool = False,
 ) -> List[DeltaItem]:
     csv_path = Path(csv_path)
+    if not csv_path.is_absolute():
+        csv_path = (REPO_ROOT / csv_path).resolve()
     if not csv_path.exists():
         raise FileNotFoundError(f"Metadata file not found: {csv_path}")
 

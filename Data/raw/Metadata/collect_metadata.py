@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
-from typing import Dict, Iterable, Iterator, List, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 try:
     from credentials import YOUTUBE_API_KEY  # type: ignore
@@ -81,6 +81,33 @@ def _to_float(v) -> float:
         return 0.0
 
 
+def _parse_iso_datetime(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _infer_age_days(base_item: Dict, snippet: Dict, captured_at_iso: str) -> float:
+    age_days = _to_float(base_item.get("age_days"))
+    if age_days > 0:
+        return age_days
+
+    published_at = (snippet or {}).get("publishedAt") or base_item.get("published_at") or ""
+    published_dt = _parse_iso_datetime(published_at)
+    captured_dt = _parse_iso_datetime(captured_at_iso)
+    if not published_dt or not captured_dt:
+        return 0.0
+
+    delta_seconds = (captured_dt - published_dt).total_seconds()
+    return (delta_seconds / 86400.0) if delta_seconds > 0 else 0.0
+
+
 def build_row(base_item: Dict, meta: Dict, chan: Dict, captured_at_iso: str) -> Dict:
     snippet = meta.get("snippet") or {}
     stats = meta.get("statistics") or {}
@@ -89,7 +116,7 @@ def build_row(base_item: Dict, meta: Dict, chan: Dict, captured_at_iso: str) -> 
     like_count = _to_int(stats.get("likeCount"))
     comment_count = _to_int(stats.get("commentCount"))
 
-    age_days = _to_float(base_item.get("age_days"))
+    age_days = _infer_age_days(base_item, snippet, captured_at_iso)
     age_days_safe = age_days if age_days > 0 else 0.0
     age_hours_safe = age_days_safe * 24 if age_days_safe > 0 else 0.0
 

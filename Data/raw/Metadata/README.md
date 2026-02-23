@@ -255,3 +255,28 @@ pip install google-cloud-storage
   - `CLOUD_PROVIDER`: `s3` or `gcs`
   - `RAW_PREFIX`: cloud path prefix for raw artifacts
   - `STATE_PREFIX`: cloud path prefix for sqlite state files
+
+**Embedding -> Fusion -> Training (S3 + Pinecone)**
+- Linear workflow file:
+  - `/video-virality-predictor/.github/workflows/embed-fuse-train.yml`
+- Stage scripts:
+  - `/video-virality-predictor/Data/embeddings/video/embed_video_delta.py`
+  - `/video-virality-predictor/Data/embeddings/audio/embed_audio_delta.py`
+  - `/video-virality-predictor/Data/embeddings/text/embed_text_delta.py`
+  - `/video-virality-predictor/Data/common/fuse_embeddings_delta.py`
+  - `/video-virality-predictor/Super_Predict/train_from_horizon.py`
+
+**Pinecone Contract**
+- Indexes:
+  - `clipfarm-video`
+  - `clipfarm-audio`
+  - `clipfarm-text`
+- Vector IDs:
+  - `video:<video_id>`
+  - `audio:<video_id>`
+  - `text:<video_id>`
+- Metadata payload:
+  - Full row metadata with truncation guardrails.
+
+**Additional Required Secret**
+- `PINECONE_API_KEY`

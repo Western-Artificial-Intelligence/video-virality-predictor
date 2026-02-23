@@ -38,6 +38,7 @@ jobs:
     env:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
       MAX_ITEMS: ${{ github.event.inputs.max_items || '0' }}
+      YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,11 +73,10 @@ jobs:
           aws s3 cp "s3://$S3_BUCKET/${STATE_PREFIX}/video_downloader.sqlite" state/video_downloader.sqlite || true
 
       - name: Prepare yt-dlp cookies file (optional)
-        if: ${{ secrets.YTDLP_COOKIES_TXT != '' }}
         run: |
-          cat > /tmp/youtube_cookies.txt <<'EOF'
-          ${{ secrets.YTDLP_COOKIES_TXT }}
-          EOF
+          if [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
+            printf "%s\n" "$YTDLP_COOKIES_TXT" > /tmp/youtube_cookies.txt
+          fi
 
       - name: Run video+audio downloader
         run: |
@@ -117,6 +117,7 @@ jobs:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
       MAX_ITEMS: ${{ github.event.inputs.max_items || '0' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -155,11 +156,10 @@ jobs:
           aws s3 cp "s3://$S3_BUCKET/${STATE_PREFIX}/text_downloader.sqlite" state/text_downloader.sqlite || true
 
       - name: Prepare yt-dlp cookies file (optional)
-        if: ${{ secrets.YTDLP_COOKIES_TXT != '' }}
         run: |
-          cat > /tmp/youtube_cookies.txt <<'EOF'
-          ${{ secrets.YTDLP_COOKIES_TXT }}
-          EOF
+          if [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
+            printf "%s\n" "$YTDLP_COOKIES_TXT" > /tmp/youtube_cookies.txt
+          fi
 
       - name: Run text collector
         run: |

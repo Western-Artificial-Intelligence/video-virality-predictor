@@ -126,12 +126,12 @@ Horizon labeling stabilizes the target by measuring views at consistent ages. Th
 
 **Daily Delta Downloaders**
 - Source of truth for all downstream media/text jobs:
-  - `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/Data/raw/Metadata/shorts_metadata_horizon.csv`
+  - `/video-virality-predictor/Data/raw/Metadata/shorts_metadata_horizon.csv`
 - Canonical ID:
   - `video_id` column is used when present.
   - Otherwise parsed from URL (`video_url`, `url`, or `youtube_url`).
 - Shared preprocessing logic implemented in:
-  - `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/Data/common/horizon_delta.py`
+  - `/video-virality-predictor/Data/common/horizon_delta.py`
 - What the helper does:
   - Loads horizon CSV.
   - Resolves URL column.
@@ -141,9 +141,9 @@ Horizon labeling stabilizes the target by measuring views at consistent ages. Th
   - Computes daily delta against script-specific SQLite state.
 
 **Per-Script State**
-- `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/state/video_downloader.sqlite`
-- `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/state/audio_downloader.sqlite`
-- `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/state/text_downloader.sqlite`
+- `/video-virality-predictor/state/video_downloader.sqlite`
+- `/video-virality-predictor/state/audio_downloader.sqlite`
+- `/video-virality-predictor/state/text_downloader.sqlite`
 - State schema fields:
   - `video_id` (primary key)
   - `source_hash`
@@ -153,11 +153,11 @@ Horizon labeling stabilizes the target by measuring views at consistent ages. Th
 
 **Output Layout**
 - Video files:
-  - `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/Data/raw/Video/<video_id>.mp4`
+  - `/video-virality-predictor/Data/raw/Video/<video_id>.mp4`
 - Audio files:
-  - `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/Data/raw/Audio/<video_id>.wav`
+  - `/video-virality-predictor/Data/raw/Audio/<video_id>.wav`
 - Text files:
-  - `/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/Data/raw/Text/<video_id>.json`
+  - `/video-virality-predictor/Data/raw/Text/<video_id>.json`
 
 **Run Commands (Daily Safe/Idempotent)**
 - Video downloader:
@@ -174,3 +174,84 @@ python Data/raw/Text/text_collect.py
 ```
 - Optional cap for testing:
   - `--max_items 10`
+
+**Raw Data Cloud Upload (Video/Audio/Text)**
+- New shared helper:
+  - `/video-virality-predictor/Data/common/cloud_sync.py`
+- Supported cloud URI schemes:
+  - `s3://bucket/prefix`
+  - `gs://bucket/prefix`
+- Upload behavior:
+  - If `--cloud_root_uri` is omitted, scripts keep existing local-only behavior.
+  - If `--cloud_root_uri` is set, successful outputs are uploaded.
+  - If upload fails, status is recorded as `fail_cloud_upload` and the item stays in delta for retry.
+  - Optional `--cloud_delete_local_after_upload` removes local artifact after successful upload.
+
+**Cloud CLI Examples**
+```bash
+python Data/raw/Video/download_video.py \
+  --cloud_root_uri s3://your-bucket/clipfarm/raw \
+  --cloud_video_prefix video \
+  --cloud_audio_prefix audio \
+  --cloud_delete_local_after_upload
+```
+
+```bash
+python Data/raw/Audio/download_audio.py \
+  --cloud_root_uri s3://your-bucket/clipfarm/raw \
+  --cloud_audio_prefix audio \
+  --cloud_delete_local_after_upload
+```
+
+```bash
+python Data/raw/Text/text_collect.py \
+  --cloud_root_uri s3://your-bucket/clipfarm/raw \
+  --cloud_text_prefix text \
+  --cloud_delete_local_after_upload
+```
+
+**Cloud Python Dependencies**
+- For S3 uploads:
+  - `boto3`
+- For GCS uploads:
+  - `google-cloud-storage`
+
+Install only what you need:
+```bash
+pip install boto3
+# or
+pip install google-cloud-storage
+```
+
+**Asynchronous GitHub Workflow (Raw Data)**
+- Workflow file:
+  - `/video-virality-predictor/.github/workflows/raw-data-async.yml`
+- Trigger:
+  - Runs after `Horizon Collector` completes (`workflow_run`), plus every 6 hours, plus manual.
+- Jobs are asynchronous:
+  - `video_audio` uploads video and extracted audio to cloud.
+  - `text` runs independently and will fetch audio from cloud when local audio is missing.
+- Why this works asynchronously:
+  - Each script has its own state DB (`video_downloader.sqlite`, `text_downloader.sqlite`).
+  - Non-terminal statuses stay in delta and are retried in future runs.
+  - Jobs do not require shared local disk across runs.
+
+**Required Secrets for raw-data-async.yml**
+- S3 mode:
+  - `AWS_ACCESS_KEY_ID`
+  - `AWS_SECRET_ACCESS_KEY`
+  - `AWS_REGION`
+  - `S3_BUCKET`
+- GCS mode:
+  - `GCP_SA_KEY_JSON`
+  - `GCS_BUCKET`
+- Text ASR fallback:
+  - `OPENAI_API_KEY`
+- Optional yt-dlp auth:
+  - `YTDLP_COOKIES_TXT` (Netscape cookies content)
+
+**Workflow Cloud Settings**
+- In `/video-virality-predictor/.github/workflows/raw-data-async.yml`:
+  - `CLOUD_PROVIDER`: `s3` or `gcs`
+  - `RAW_PREFIX`: cloud path prefix for raw artifacts
+  - `STATE_PREFIX`: cloud path prefix for sqlite state files

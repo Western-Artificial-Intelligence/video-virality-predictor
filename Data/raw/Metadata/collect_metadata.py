@@ -93,12 +93,17 @@ def _parse_iso_datetime(value: str) -> Optional[datetime]:
         return None
 
 
-def _infer_age_days(base_item: Dict, snippet: Dict, captured_at_iso: str) -> float:
+def _infer_age_days(base_item: Dict, snippet: Dict, meta: Dict, captured_at_iso: str) -> float:
     age_days = _to_float(base_item.get("age_days"))
     if age_days > 0:
         return age_days
 
-    published_at = (snippet or {}).get("publishedAt") or base_item.get("published_at") or ""
+    published_at = (
+        (snippet or {}).get("publishedAt")
+        or meta.get("published_at")
+        or base_item.get("published_at")
+        or ""
+    )
     published_dt = _parse_iso_datetime(published_at)
     captured_dt = _parse_iso_datetime(captured_at_iso)
     if not published_dt or not captured_dt:
@@ -112,17 +117,20 @@ def build_row(base_item: Dict, meta: Dict, chan: Dict, captured_at_iso: str) -> 
     snippet = meta.get("snippet") or {}
     stats = meta.get("statistics") or {}
 
-    view_count = _to_int(stats.get("viewCount"))
-    like_count = _to_int(stats.get("likeCount"))
-    comment_count = _to_int(stats.get("commentCount"))
+    # Support both raw YouTube API shape and normalized collector shape.
+    view_count = _to_int(stats.get("viewCount") if "viewCount" in stats else meta.get("view_count"))
+    like_count = _to_int(stats.get("likeCount") if "likeCount" in stats else meta.get("like_count"))
+    comment_count = _to_int(
+        stats.get("commentCount") if "commentCount" in stats else meta.get("comment_count")
+    )
 
-    age_days = _infer_age_days(base_item, snippet, captured_at_iso)
+    age_days = _infer_age_days(base_item, snippet, meta, captured_at_iso)
     age_days_safe = age_days if age_days > 0 else 0.0
     age_hours_safe = age_days_safe * 24 if age_days_safe > 0 else 0.0
 
-    chan_subs = _to_int(chan.get("subscriberCount"))
-    chan_videos = _to_int(chan.get("videoCount"))
-    chan_views = _to_int(chan.get("viewCount"))
+    chan_subs = _to_int(chan.get("subscriberCount") if "subscriberCount" in chan else chan.get("channel_subscriber_count"))
+    chan_videos = _to_int(chan.get("videoCount") if "videoCount" in chan else chan.get("channel_video_count"))
+    chan_views = _to_int(chan.get("viewCount") if "viewCount" in chan else chan.get("channel_view_count"))
 
     row = {
         "video_id": base_item.get("video_id") or meta.get("id") or "",
@@ -131,8 +139,18 @@ def build_row(base_item: Dict, meta: Dict, chan: Dict, captured_at_iso: str) -> 
         "category_type": base_item.get("category_type") or "",
         "collector_version": COLLECTOR_VERSION,
         "captured_at": captured_at_iso,
-        "channel_id": snippet.get("channelId") or base_item.get("channel_id") or "",
-        "published_at": snippet.get("publishedAt") or base_item.get("published_at") or "",
+        "channel_id": (
+            snippet.get("channelId")
+            or meta.get("channel_id")
+            or base_item.get("channel_id")
+            or ""
+        ),
+        "published_at": (
+            snippet.get("publishedAt")
+            or meta.get("published_at")
+            or base_item.get("published_at")
+            or ""
+        ),
         "view_count": view_count,
         "like_count": like_count,
         "comment_count": comment_count,
@@ -146,8 +164,12 @@ def build_row(base_item: Dict, meta: Dict, chan: Dict, captured_at_iso: str) -> 
         "channel_subscriber_count": chan_subs,
         "channel_video_count": chan_videos,
         "channel_view_count": chan_views,
-        "channel_created_at": chan.get("publishedAt") or "",
-        "channel_country": chan.get("country") or "",
-        "channel_description_length": len((chan.get("description") or "")),
+        "channel_created_at": chan.get("publishedAt") or chan.get("channel_created_at") or "",
+        "channel_country": chan.get("country") or chan.get("channel_country") or "",
+        "channel_description_length": (
+            _to_int(chan.get("channel_description_length"))
+            if chan.get("channel_description_length") is not None
+            else len((chan.get("description") or ""))
+        ),
     }
     return row

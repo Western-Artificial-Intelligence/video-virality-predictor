@@ -1,0 +1,64 @@
+name: Train From Fusion
+
+on:
+  workflow_run:
+    workflows: ["Fusion Delta"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      target_horizon_days:
+        description: "Training horizon target days"
+        required: false
+        default: "7"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: train-from-fusion
+  cancel-in-progress: false
+
+env:
+  METADATA_CSV: Data/raw/Metadata/shorts_metadata_horizon.csv
+  FUSED_PREFIX: clipfarm/fused
+  MODEL_OUT_PREFIX: clipfarm/models/virality/latest
+  TARGET_HORIZON_DAYS: ${{ github.event.inputs.target_horizon_days || '7' }}
+
+jobs:
+  train:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate secrets
+        run: |
+          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "Missing required AWS secrets for training stage"
+            exit 1
+          fi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install boto3 pandas numpy torch pyarrow scikit-learn joblib
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Run training
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          python Super_Predict/train_from_horizon.py \
+            --metadata_csv "$METADATA_CSV" \
+            --s3_bucket "$S3_BUCKET" \
+            --s3_region "$AWS_REGION" \
+            --fused_manifest_s3_key "$FUSED_PREFIX/fused_manifest.parquet" \
+            --fused_pt_s3_key "$FUSED_PREFIX/fused.pt" \
+            --model_out_prefix "$MODEL_OUT_PREFIX" \
+            --target_horizon_days "$TARGET_HORIZON_DAYS"

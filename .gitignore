@@ -5,7 +5,6 @@ Data/Text/__pycache__
 Data/Text/credentials.py
 Data/Text/temp_audio_downloads
 
-horizon_labels.sqlite
 __pycache__
 
 # Repo-root credentials (do not commit API keys)
@@ -19,4 +18,3 @@ venv
 Data/raw/Video/raw_data/
 Data/raw/Audio/raw_data/
 Data/raw/Text/raw_data/
-state/*.sqlite

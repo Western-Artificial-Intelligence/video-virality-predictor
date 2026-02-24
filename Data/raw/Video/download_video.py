@@ -328,7 +328,9 @@ def main() -> None:
         skipped_cooldown = 0
         extracted_audio = 0
 
-        for item in delta:
+        total = len(delta)
+        for idx, item in enumerate(delta, start=1):
+            print(f"[video] {idx}/{total} {item.video_id}: start", flush=True)
             out_mp4 = out_dir / f"{item.video_id}.mp4"
             wav_path = audio_dir / f"{item.video_id}.wav"
             existing = state.get(item.video_id)
@@ -336,17 +338,21 @@ def main() -> None:
             if outputs_ready and existing and existing[3] == "success":
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "success", "skipped_existing")
                 skipped_existing += 1
+                print(f"[video] {idx}/{total} {item.video_id}: skipped_existing", flush=True)
                 continue
             if existing and is_cooldown_active(existing, item.source_hash, args.challenge_cooldown_hours):
                 skipped_cooldown += 1
+                print(f"[video] {idx}/{total} {item.video_id}: skipped_cooldown", flush=True)
                 continue
             if existing and is_terminal_video_failure(existing, item.source_hash):
                 skipped_terminal += 1
+                print(f"[video] {idx}/{total} {item.video_id}: skipped_terminal", flush=True)
                 continue
 
             if not item.video_url:
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "missing", "missing_url")
                 failed += 1
+                print(f"[video] {idx}/{total} {item.video_id}: missing_url", flush=True)
                 continue
 
             done = False
@@ -406,9 +412,11 @@ def main() -> None:
                 fail_status = classify_video_error(error_text)
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), fail_status, error_text)
                 failed += 1
+                print(f"[video] {idx}/{total} {item.video_id}: {fail_status}", flush=True)
             else:
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "success", "")
                 success += 1
+                print(f"[video] {idx}/{total} {item.video_id}: success", flush=True)
 
         print("Video downloader summary")
         print(f"metadata_rows_deduped: {len(items)}")

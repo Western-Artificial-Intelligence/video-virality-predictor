@@ -321,12 +321,15 @@ def main() -> None:
         skipped_existing = 0
         missing_audio = 0
 
-        for item in delta:
+        total = len(delta)
+        for idx, item in enumerate(delta, start=1):
+            print(f"[text] {idx}/{total} {item.video_id}: start", flush=True)
             out_path = out_dir / f"{item.video_id}.json"
             existing = state.get(item.video_id)
             if out_path.exists() and existing and existing[3] == "success":
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "success", "skipped_existing")
                 skipped_existing += 1
+                print(f"[text] {idx}/{total} {item.video_id}: skipped_existing", flush=True)
                 continue
 
             try:
@@ -383,6 +386,7 @@ def main() -> None:
                         write_text_json(out_path, payload)
                         state.upsert(item.video_id, item.source_hash, utc_now_iso(), "missing_audio", "audio_not_found")
                         missing_audio += 1
+                        print(f"[text] {idx}/{total} {item.video_id}: missing_audio", flush=True)
                         continue
 
                     asr_text, asr_meta = transcribe_audio(
@@ -424,8 +428,10 @@ def main() -> None:
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), status, payload["error"])
                 if status == "success":
                     success += 1
+                    print(f"[text] {idx}/{total} {item.video_id}: success", flush=True)
                 else:
                     failed += 1
+                    print(f"[text] {idx}/{total} {item.video_id}: {status}", flush=True)
             except Exception as exc:
                 err = str(exc)
                 status = classify_error(err)
@@ -440,6 +446,7 @@ def main() -> None:
                 write_text_json(out_path, payload)
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), status, err)
                 failed += 1
+                print(f"[text] {idx}/{total} {item.video_id}: {status}", flush=True)
 
         print("Text downloader summary")
         print(f"metadata_rows_deduped: {len(items)}")

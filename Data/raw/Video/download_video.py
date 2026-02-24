@@ -333,7 +333,14 @@ def main() -> None:
                         error_text = str(exc)
                         status = classify_video_error(error_text)
                         # Deterministic/gated failures should not be retried immediately.
-                        if status in {"fail_challenge_gated", "fail_format_unavailable", "fail_auth"}:
+                        if status in {
+                            "fail_challenge_gated",
+                            "fail_format_unavailable",
+                            "fail_auth",
+                            "fail_removed",
+                            "fail_private",
+                            "fail_unavailable",
+                        }:
                             break
                         if attempt <= args.retry:
                             time.sleep(args.retry_delay * attempt)

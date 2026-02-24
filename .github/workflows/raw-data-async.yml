@@ -27,13 +27,12 @@ env:
   VIDEO_PREFIX: video
   AUDIO_PREFIX: audio
   TEXT_PREFIX: text
-  DEFAULT_BRANCH: main
 
 jobs:
   video_audio:
     if: >-
       github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == env.DEFAULT_BRANCH)
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -111,7 +110,7 @@ jobs:
   text:
     if: >-
       github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == env.DEFAULT_BRANCH)
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}

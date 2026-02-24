@@ -38,6 +38,7 @@ jobs:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
       MAX_ITEMS: ${{ github.event.inputs.max_items || '100' }}
       YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
+      YTDLP_COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,8 +79,18 @@ jobs:
 
       - name: Prepare yt-dlp cookies file (optional)
         run: |
-          if [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
+          if [ -n "${YTDLP_COOKIES_B64:-}" ]; then
+            printf "%s" "$YTDLP_COOKIES_B64" | base64 -d > /tmp/youtube_cookies.txt
+          elif [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
             printf "%s\n" "$YTDLP_COOKIES_TXT" > /tmp/youtube_cookies.txt
+          fi
+
+          if [ -f /tmp/youtube_cookies.txt ]; then
+            echo "cookies_file_present=yes"
+            echo "cookies_line_count=$(wc -l < /tmp/youtube_cookies.txt)"
+            echo "cookies_header=$(head -n 1 /tmp/youtube_cookies.txt)"
+          else
+            echo "cookies_file_present=no"
           fi
 
       - name: Run video+audio downloader
@@ -130,6 +141,7 @@ jobs:
       MAX_ITEMS: ${{ github.event.inputs.max_items || '100' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
+      YTDLP_COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -172,8 +184,18 @@ jobs:
 
       - name: Prepare yt-dlp cookies file (optional)
         run: |
-          if [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
+          if [ -n "${YTDLP_COOKIES_B64:-}" ]; then
+            printf "%s" "$YTDLP_COOKIES_B64" | base64 -d > /tmp/youtube_cookies.txt
+          elif [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
             printf "%s\n" "$YTDLP_COOKIES_TXT" > /tmp/youtube_cookies.txt
+          fi
+
+          if [ -f /tmp/youtube_cookies.txt ]; then
+            echo "cookies_file_present=yes"
+            echo "cookies_line_count=$(wc -l < /tmp/youtube_cookies.txt)"
+            echo "cookies_header=$(head -n 1 /tmp/youtube_cookies.txt)"
+          else
+            echo "cookies_file_present=no"
           fi
 
       - name: Run text collector

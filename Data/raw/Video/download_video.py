@@ -40,6 +40,12 @@ def parse_iso(value: str) -> datetime | None:
 
 def classify_video_error(error_text: str) -> str:
     msg = (error_text or "").lower()
+    if "video unavailable. this video has been removed by the uploader" in msg:
+        return "fail_removed"
+    if "video unavailable. this video is private" in msg:
+        return "fail_private"
+    if "video unavailable" in msg or "this video is not available" in msg:
+        return "fail_unavailable"
     if "only images are available" in msg or "signature solving failed" in msg or "n challenge solving failed" in msg:
         return "fail_challenge_gated"
     if "http error 429" in msg or "too many requests" in msg:
@@ -57,6 +63,15 @@ def classify_video_error(error_text: str) -> str:
     if "cloud_upload_failed" in msg:
         return "fail_cloud_upload"
     return "fail"
+
+
+def is_terminal_video_failure(existing: tuple, item_hash: str) -> bool:
+    # existing tuple schema: (video_id, source_hash, processed_at, status, error)
+    existing_hash = existing[1]
+    status = existing[3]
+    if existing_hash != item_hash:
+        return False
+    return status in {"missing", "fail_removed", "fail_private", "fail_unavailable"}
 
 
 def is_cooldown_active(existing: tuple, item_hash: str, cooldown_hours: float) -> bool:
@@ -105,6 +120,10 @@ def build_ydl_opts(
         "extractor_args": {"youtube": {"player_client": clients}},
         # Be conservative on fragment parallelism to reduce mid-stream 403s.
         "concurrent_fragment_downloads": 1,
+        # Prevent long hangs on problematic IDs.
+        "socket_timeout": 20,
+        "retries": 1,
+        "fragment_retries": 1,
     }
     if cookies_file:
         ydl_opts["cookiefile"] = cookies_file
@@ -185,7 +204,6 @@ def download_video_with_fallback(
     should_try_mobile_fallback = bool(cookies_file or cookies_from_browser) and first_status in {
         "fail_challenge_gated",
         "fail_format_unavailable",
-        "fail_auth",
     }
     if not should_try_mobile_fallback:
         raise RuntimeError(first_error)
@@ -272,6 +290,7 @@ def main() -> None:
         success = 0
         failed = 0
         skipped_existing = 0
+        skipped_terminal = 0
         skipped_cooldown = 0
         extracted_audio = 0
 
@@ -286,6 +305,9 @@ def main() -> None:
                 continue
             if existing and is_cooldown_active(existing, item.source_hash, args.challenge_cooldown_hours):
                 skipped_cooldown += 1
+                continue
+            if existing and is_terminal_video_failure(existing, item.source_hash):
+                skipped_terminal += 1
                 continue
 
             if not item.video_url:
@@ -351,6 +373,7 @@ def main() -> None:
         print(f"success: {success}")
         print(f"extracted_audio: {extracted_audio}")
         print(f"skipped_existing: {skipped_existing}")
+        print(f"skipped_terminal: {skipped_terminal}")
         print(f"skipped_cooldown: {skipped_cooldown}")
         print(f"failed: {failed}")
         print(f"output_dir: {out_dir}")

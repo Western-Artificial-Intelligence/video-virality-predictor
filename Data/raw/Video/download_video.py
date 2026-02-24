@@ -95,6 +95,8 @@ def build_ydl_opts(
     cookies_file: str,
     cookies_from_browser: str,
     player_clients: str,
+    sleep_interval: float,
+    max_sleep_interval: float,
 ) -> dict:
     out_tmpl = str(out_mp4.with_suffix(".%(ext)s"))
     clients = [c.strip() for c in (player_clients or "").split(",") if c.strip()]
@@ -129,6 +131,11 @@ def build_ydl_opts(
         ydl_opts["cookiefile"] = cookies_file
     if cookies_from_browser:
         ydl_opts["cookiesfrombrowser"] = (cookies_from_browser,)
+    if sleep_interval > 0:
+        ydl_opts["sleep_interval"] = sleep_interval
+        ydl_opts["sleep_interval_requests"] = sleep_interval
+        if max_sleep_interval > sleep_interval:
+            ydl_opts["max_sleep_interval"] = max_sleep_interval
     return ydl_opts
 
 
@@ -138,8 +145,17 @@ def download_video(
     cookies_file: str,
     cookies_from_browser: str,
     player_clients: str,
+    sleep_interval: float,
+    max_sleep_interval: float,
 ) -> None:
-    ydl_opts = build_ydl_opts(out_mp4, cookies_file, cookies_from_browser, player_clients)
+    ydl_opts = build_ydl_opts(
+        out_mp4,
+        cookies_file,
+        cookies_from_browser,
+        player_clients,
+        sleep_interval,
+        max_sleep_interval,
+    )
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
@@ -182,6 +198,8 @@ def download_video_with_fallback(
     cookies_file: str,
     cookies_from_browser: str,
     player_clients: str,
+    sleep_interval: float,
+    max_sleep_interval: float,
 ) -> None:
     # Attempt 1: caller-configured strategy (typically cookies + web clients).
     first_error = ""
@@ -192,6 +210,8 @@ def download_video_with_fallback(
             cookies_file=cookies_file,
             cookies_from_browser=cookies_from_browser,
             player_clients=player_clients,
+            sleep_interval=sleep_interval,
+            max_sleep_interval=max_sleep_interval,
         )
         return
     except Exception as exc:
@@ -215,6 +235,8 @@ def download_video_with_fallback(
             cookies_file="",
             cookies_from_browser="",
             player_clients="android,ios,tv",
+            sleep_interval=sleep_interval,
+            max_sleep_interval=max_sleep_interval,
         )
         return
     except Exception as exc2:
@@ -244,6 +266,18 @@ def main() -> None:
         type=float,
         default=24.0,
         help="Skip retrying challenge/rate/auth-gated IDs for this many hours",
+    )
+    parser.add_argument(
+        "--sleep_interval",
+        type=float,
+        default=0.0,
+        help="Seconds to sleep between yt-dlp HTTP requests/downloads (helps reduce bot/rate triggers)",
+    )
+    parser.add_argument(
+        "--max_sleep_interval",
+        type=float,
+        default=0.0,
+        help="Max randomized sleep interval for yt-dlp when sleep_interval is set",
     )
     parser.add_argument("--include_captured_at_in_hash", action="store_true")
     parser.add_argument("--cookies_file", default="", help="Path to Netscape cookies.txt for yt-dlp")
@@ -326,6 +360,8 @@ def main() -> None:
                             cookies_file=args.cookies_file,
                             cookies_from_browser=args.cookies_from_browser,
                             player_clients=args.player_clients,
+                            sleep_interval=args.sleep_interval,
+                            max_sleep_interval=args.max_sleep_interval,
                         )
                         done = True
                         break

@@ -2,8 +2,8 @@ name: Horizon Collector
 
 on:
   schedule:
-    # 23:30 America/Los_Angeles ~= 07:30 UTC (DST may shift by 1 hour)
-    - cron: "30 7 * * *"
+    # Run 4 times/day (every 6 hours) at minute 30 UTC.
+    - cron: "30 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -35,12 +35,30 @@ jobs:
 
       - name: Write credentials.py from secret
         env:
+          YOUTUBE_API_KEYS: ${{ secrets.YOUTUBE_API_KEYS }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: |
-          if [ -z "$YOUTUBE_API_KEY" ]; then
-            echo "YOUTUBE_API_KEY secret is missing"
+          if [ -z "${YOUTUBE_API_KEYS:-}" ] && [ -z "${YOUTUBE_API_KEY:-}" ]; then
+            echo "Missing YouTube API secret. Set YOUTUBE_API_KEY or YOUTUBE_API_KEYS."
             exit 1
           fi
+
+          if [ -n "${YOUTUBE_API_KEYS:-}" ]; then
+            # Normalize separators and pick first key for compatibility module import.
+            normalized="$(echo "$YOUTUBE_API_KEYS" | tr ', ' '\n' | sed '/^$/d')"
+            first_key="$(echo "$normalized" | head -n 1)"
+            if [ -z "$first_key" ]; then
+              echo "YOUTUBE_API_KEYS is set but no valid key was parsed"
+              exit 1
+            fi
+            {
+              echo "YOUTUBE_API_KEYS<<EOF"
+              echo "$normalized"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+            YOUTUBE_API_KEY="$first_key"
+          fi
+
           cat > credentials.py <<PY
           YOUTUBE_API_KEY = "${YOUTUBE_API_KEY}"
           PY

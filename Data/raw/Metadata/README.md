@@ -88,12 +88,13 @@ plutil -p ~/Library/LaunchAgents/com.clipfarm.horizon-collector.plist
   - Manual run (`workflow_dispatch`)
 - Runtime behavior:
   - Installs minimal collector dependency (`requests`)
-  - Writes `credentials.py` from GitHub secret `YOUTUBE_API_KEY`
+  - Writes `credentials.py` from GitHub secret `YOUTUBE_API_KEY` (or first key in `YOUTUBE_API_KEYS`)
+  - If `YOUTUBE_API_KEYS` is provided (comma/newline separated), collector can rotate keys on quota/rate errors
   - Runs `python Data/raw/Metadata/daily_horizon_collector.py --channel-median-sample 0`
 
 **GitHub Secrets Required**
 - Always required:
-  - `YOUTUBE_API_KEY`
+  - `YOUTUBE_API_KEY` (single key) OR `YOUTUBE_API_KEYS` (multi-key rotation)
 - Required only for S3 persistence mode:
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
@@ -279,27 +280,14 @@ export OPENAI_API_KEY=...
 ./scripts/run_raw_pipeline_local.sh
 ```
 
-**Embedding -> Fusion -> Training (S3 + Pinecone)**
+**Embedding -> Fusion -> Training (S3-only Embeddings)**
 - Linear workflow file:
-  - `/video-virality-predictor/.github/workflows/embed-fuse-train.yml`
+  - `/video-virality-predictor/.github/workflows/embeddings-delta.yml`
+  - `/video-virality-predictor/.github/workflows/fusion-delta.yml`
+  - `/video-virality-predictor/.github/workflows/train-from-fusion.yml`
 - Stage scripts:
-  - `/video-virality-predictor/Data/embeddings/video/embed_video_delta.py`
-  - `/video-virality-predictor/Data/embeddings/audio/embed_audio_delta.py`
-  - `/video-virality-predictor/Data/embeddings/text/embed_text_delta.py`
+  - `/video-virality-predictor/Data/Embeddings/video/embed_video_delta.py`
+  - `/video-virality-predictor/Data/Embeddings/audio/embed_audio_delta.py`
+  - `/video-virality-predictor/Data/Embeddings/text/embed_text_delta.py`
   - `/video-virality-predictor/Data/common/fuse_embeddings_delta.py`
   - `/video-virality-predictor/Super_Predict/train_from_horizon.py`
-
-**Pinecone Contract**
-- Indexes:
-  - `clipfarm-video`
-  - `clipfarm-audio`
-  - `clipfarm-text`
-- Vector IDs:
-  - `video:<video_id>`
-  - `audio:<video_id>`
-  - `text:<video_id>`
-- Metadata payload:
-  - Full row metadata with truncation guardrails.
-
-**Additional Required Secret**
-- `PINECONE_API_KEY`

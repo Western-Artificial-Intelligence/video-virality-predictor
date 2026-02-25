@@ -12,6 +12,7 @@ import sys
 import csv
 import time
 import random
+import re
 import sqlite3
 import requests
 import statistics
@@ -94,6 +95,72 @@ HORIZON_EXTRA_FIELDS = [
 ]
 
 
+def _load_api_keys():
+    keys = []
+    raw = os.environ.get("YOUTUBE_API_KEYS", "")
+    if raw:
+        # Support comma, newline, or whitespace separated key lists.
+        for part in re.split(r"[\s,]+", raw.strip()):
+            if part:
+                keys.append(part)
+    if getattr(base, "YOUTUBE_API_KEY", ""):
+        keys.append(base.YOUTUBE_API_KEY)
+
+    # Deduplicate while preserving order.
+    out = []
+    seen = set()
+    for k in keys:
+        if k and k not in seen:
+            out.append(k)
+            seen.add(k)
+    return out
+
+
+API_KEYS = _load_api_keys()
+API_KEY_INDEX = 0
+
+
+def current_api_key():
+    if not API_KEYS:
+        return ""
+    return API_KEYS[API_KEY_INDEX]
+
+
+def rotate_api_key():
+    global API_KEY_INDEX
+    if len(API_KEYS) <= 1:
+        return False
+    prev = API_KEY_INDEX
+    API_KEY_INDEX = (API_KEY_INDEX + 1) % len(API_KEYS)
+    return API_KEY_INDEX != prev
+
+
+def _extract_error_reasons(resp):
+    try:
+        payload = resp.json() if resp is not None else {}
+    except Exception:
+        return []
+    error = payload.get("error") or {}
+    errors = error.get("errors") or []
+    reasons = []
+    for e in errors:
+        reason = (e or {}).get("reason")
+        if reason:
+            reasons.append(str(reason))
+    return reasons
+
+
+def _is_quota_or_rate_error(resp):
+    if resp is None:
+        return False
+    if resp.status_code not in (403, 429):
+        return False
+    reasons = [r.lower() for r in _extract_error_reasons(resp)]
+    if not reasons:
+        return resp.status_code == 429
+    return any(("quota" in r) or ("rate" in r) or ("limit" in r) for r in reasons)
+
+
 # Convert a datetime to RFC3339 UTC format required by YouTube API.
 # Example: 2026-02-05T12:00:00Z
 def to_rfc3339(dt: datetime) -> str:
@@ -127,6 +194,11 @@ def request_with_backoff(url: str, params: dict, max_retries: int = 5, base_dela
 
     # Attempt the request multiple times with exponential backoff.
     for attempt in range(max_retries):
+        # Always inject the current key so retries can rotate keys when needed.
+        key = current_api_key()
+        if key:
+            params["key"] = key
+
         try:
             # Execute the request with a reasonable timeout.
             resp = requests.get(url, params=params, timeout=30)
@@ -143,6 +215,11 @@ def request_with_backoff(url: str, params: dict, max_retries: int = 5, base_dela
         # Decide whether to retry based on status codes or network failure.
         status = resp.status_code if resp is not None else None
         if status in (403, 429, 500, 503) or resp is None:
+            # On quota/rate errors, rotate API key first (if available).
+            if _is_quota_or_rate_error(resp) and rotate_api_key():
+                print(f"INFO: rotating YouTube API key to slot {API_KEY_INDEX + 1}/{len(API_KEYS)}")
+                continue
+
             # Exponential backoff plus a small random jitter.
             sleep_s = base_delay * (2 ** attempt) + random.random() * 0.25
             time.sleep(sleep_s)
@@ -628,6 +705,7 @@ def main():
     print(f"Collector version: {base.COLLECTOR_VERSION}")
     print(f"Captured at: {captured_at_iso}")
     print(f"Horizons: {horizons} days (tolerance +/- {tolerance_days} days)")
+    print(f"YouTube API keys loaded: {len(API_KEYS)}")
     print(f"Channel median shorts sample: {channel_median_sample}")
 
     # Map of video_id -> base discovery record.

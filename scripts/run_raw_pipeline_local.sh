@@ -33,6 +33,8 @@ STATE_PREFIX="${STATE_PREFIX:-clipfarm/state}"
 VIDEO_PREFIX="${VIDEO_PREFIX:-video}"
 AUDIO_PREFIX="${AUDIO_PREFIX:-audio}"
 TEXT_PREFIX="${TEXT_PREFIX:-text}"
+PIPELINE_LOCK_DIR="${PIPELINE_LOCK_DIR:-/tmp/clipfarm_raw_pipeline.lock}"
+PIPELINE_LOCK_BYPASS="${PIPELINE_LOCK_BYPASS:-0}"
 
 if [[ -z "$S3_BUCKET" ]]; then
   echo "ERROR: S3_BUCKET is required (example: export S3_BUCKET=clipfarm-prod-us-west-2)"
@@ -40,7 +42,7 @@ if [[ -z "$S3_BUCKET" ]]; then
 fi
 
 METADATA_CSV="${METADATA_CSV:-Data/raw/Metadata/shorts_metadata_horizon.csv}"
-MAX_ITEMS="${MAX_ITEMS:-100}"
+MAX_ITEMS="${MAX_ITEMS:-0}"
 SYNC_METADATA_FROM_ORIGIN="${SYNC_METADATA_FROM_ORIGIN:-1}"
 ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
 ORIGIN_BRANCH="${ORIGIN_BRANCH:-main}"
@@ -54,6 +56,7 @@ VIDEO_CHALLENGE_COOLDOWN_HOURS="${VIDEO_CHALLENGE_COOLDOWN_HOURS:-24}"
 VIDEO_UPCOMING_COOLDOWN_HOURS="${VIDEO_UPCOMING_COOLDOWN_HOURS:-48}"
 VIDEO_SLEEP_INTERVAL="${VIDEO_SLEEP_INTERVAL:-1.5}"
 VIDEO_MAX_SLEEP_INTERVAL="${VIDEO_MAX_SLEEP_INTERVAL:-4.0}"
+VIDEO_PLAYER_CLIENTS="${VIDEO_PLAYER_CLIENTS:-}"
 
 TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-openai_api}"
 TEXT_ASR_MODEL="${TEXT_ASR_MODEL:-}"
@@ -114,6 +117,14 @@ if [[ "$AUTO_UPGRADE_YTDLP" == "1" ]]; then
   "$_PYTHON_BIN" -m pip install -q -U yt-dlp || echo "[deps] warning: yt-dlp auto-upgrade failed; continuing with installed version"
 fi
 
+if [[ -z "$VIDEO_PLAYER_CLIENTS" ]]; then
+  if [[ -n "$COOKIES_FILE" || -n "$COOKIES_FROM_BROWSER" ]]; then
+    VIDEO_PLAYER_CLIENTS="web,web_safari"
+  else
+    VIDEO_PLAYER_CLIENTS="android,tv"
+  fi
+fi
+
 restore_state() {
   echo "[state] restoring from s3://${S3_BUCKET}/${STATE_PREFIX}"
   aws s3 cp "s3://${S3_BUCKET}/${VIDEO_STATE_KEY}" "$VIDEO_STATE_DB" >/dev/null 2>&1 || true
@@ -149,7 +160,65 @@ cleanup_local_raw_data() {
   echo "[cleanup] total files deleted: ${total_deleted}"
 }
 
-trap persist_state EXIT
+LOCK_ACQUIRED=0
+
+acquire_lock() {
+  if [[ "$PIPELINE_LOCK_BYPASS" == "1" ]]; then
+    echo "[lock] bypassed (PIPELINE_LOCK_BYPASS=1)"
+    return
+  fi
+
+  if mkdir "$PIPELINE_LOCK_DIR" 2>/dev/null; then
+    LOCK_ACQUIRED=1
+    echo "$$" > "$PIPELINE_LOCK_DIR/pid"
+    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$PIPELINE_LOCK_DIR/started_at"
+    echo "[lock] acquired ${PIPELINE_LOCK_DIR} (pid=$$)"
+    return
+  fi
+
+  local holder_pid=""
+  if [[ -f "$PIPELINE_LOCK_DIR/pid" ]]; then
+    holder_pid="$(cat "$PIPELINE_LOCK_DIR/pid" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "$holder_pid" ]] && ! kill -0 "$holder_pid" 2>/dev/null; then
+    echo "[lock] removing stale lock from dead pid=${holder_pid}"
+    rm -rf "$PIPELINE_LOCK_DIR"
+    if mkdir "$PIPELINE_LOCK_DIR" 2>/dev/null; then
+      LOCK_ACQUIRED=1
+      echo "$$" > "$PIPELINE_LOCK_DIR/pid"
+      date -u +"%Y-%m-%dT%H:%M:%SZ" > "$PIPELINE_LOCK_DIR/started_at"
+      echo "[lock] acquired ${PIPELINE_LOCK_DIR} (pid=$$)"
+      return
+    fi
+  fi
+
+  echo "ERROR: another raw pipeline run is already active."
+  echo "  lock_dir: $PIPELINE_LOCK_DIR"
+  if [[ -n "$holder_pid" ]]; then
+    echo "  holder_pid: $holder_pid"
+  fi
+  echo "Stop the other run, or set PIPELINE_LOCK_BYPASS=1 (not recommended)."
+  exit 1
+}
+
+release_lock() {
+  if [[ "$LOCK_ACQUIRED" == "1" ]]; then
+    rm -rf "$PIPELINE_LOCK_DIR" || true
+    echo "[lock] released ${PIPELINE_LOCK_DIR}"
+  fi
+}
+
+on_exit() {
+  local exit_code=$?
+  persist_state || true
+  release_lock
+  return "$exit_code"
+}
+
+trap on_exit EXIT
+
+acquire_lock
 
 if [[ "$SYNC_METADATA_FROM_ORIGIN" == "1" ]]; then
   echo "[metadata] syncing ${METADATA_CSV} from ${ORIGIN_REMOTE}/${ORIGIN_BRANCH}"
@@ -182,6 +251,8 @@ video_args=(
 if [[ "$MAX_ITEMS" != "0" ]]; then
   video_args+=(--max_items "$MAX_ITEMS")
 fi
+
+video_args+=(--player_clients "$VIDEO_PLAYER_CLIENTS")
 
 if [[ -n "$COOKIES_FILE" ]]; then
   video_args+=(--cookies_file "$COOKIES_FILE")

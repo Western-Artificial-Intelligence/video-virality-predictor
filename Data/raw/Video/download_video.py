@@ -6,6 +6,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import yt_dlp
 
@@ -40,13 +41,20 @@ def parse_iso(value: str) -> datetime | None:
 
 def classify_video_error(error_text: str) -> str:
     msg = (error_text or "").lower()
+    if "premieres in" in msg or "this live event will begin" in msg or "upcoming" in msg:
+        return "fail_upcoming"
     if "video unavailable. this video has been removed by the uploader" in msg:
         return "fail_removed"
     if "video unavailable. this video is private" in msg:
         return "fail_private"
     if "video unavailable" in msg or "this video is not available" in msg:
         return "fail_unavailable"
-    if "only images are available" in msg or "signature solving failed" in msg or "n challenge solving failed" in msg:
+    if (
+        "only images are available" in msg
+        or "signature solving failed" in msg
+        or "n challenge solving failed" in msg
+        or "no video formats found" in msg
+    ):
         return "fail_challenge_gated"
     if "http error 429" in msg or "too many requests" in msg:
         return "fail_rate_limited"
@@ -81,7 +89,13 @@ def is_cooldown_active(existing: tuple, item_hash: str, cooldown_hours: float) -
     status = existing[3]
     if existing_hash != item_hash:
         return False
-    if status not in {"fail_challenge_gated", "fail_rate_limited", "fail_auth", "fail_forbidden"}:
+    if status not in {
+        "fail_challenge_gated",
+        "fail_rate_limited",
+        "fail_auth",
+        "fail_forbidden",
+        "fail_format_unavailable",
+    }:
         return False
     ts = parse_iso(processed_at)
     if ts is None:
@@ -94,17 +108,18 @@ def build_ydl_opts(
     out_mp4: Path,
     cookies_file: str,
     cookies_from_browser: str,
-    player_clients: str,
+    player_clients: Optional[str],
     sleep_interval: float,
     max_sleep_interval: float,
+    format_selector: str = "bv*+ba/best",
 ) -> dict:
     out_tmpl = str(out_mp4.with_suffix(".%(ext)s"))
-    clients = [c.strip() for c in (player_clients or "").split(",") if c.strip()]
+    clients = [] if player_clients is None else [c.strip() for c in (player_clients or "").split(",") if c.strip()]
     using_cookies = bool(cookies_file or cookies_from_browser)
-    if not clients:
+    if player_clients is not None and not clients:
         # Web clients can use authenticated cookies. Android/iOS clients cannot.
-        clients = ["web", "web_safari"] if using_cookies else ["android", "ios"]
-    elif using_cookies:
+        clients = ["web", "web_safari"] if using_cookies else ["android", "ios", "tv"]
+    elif clients and using_cookies:
         # If caller explicitly passed unsupported cookie clients, fix automatically.
         mobile_only = {"android", "ios"}
         filtered = [c for c in clients if c not in mobile_only]
@@ -114,7 +129,7 @@ def build_ydl_opts(
         "outtmpl": out_tmpl,
         # Relax format constraints to reduce "Requested format is not available"
         # on Shorts where only non-mp4 streams are exposed.
-        "format": "bv*+ba/best",
+        "format": format_selector,
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,
@@ -127,6 +142,9 @@ def build_ydl_opts(
         "retries": 1,
         "fragment_retries": 1,
     }
+    if player_clients is not None:
+        # Avoid SABR-prone web clients where possible.
+        ydl_opts["extractor_args"] = {"youtube": {"player_client": clients}}
     if cookies_file:
         ydl_opts["cookiefile"] = cookies_file
     if cookies_from_browser:
@@ -144,9 +162,10 @@ def download_video(
     out_mp4: Path,
     cookies_file: str,
     cookies_from_browser: str,
-    player_clients: str,
+    player_clients: Optional[str],
     sleep_interval: float,
     max_sleep_interval: float,
+    format_selector: str = "bv*+ba/best",
 ) -> None:
     ydl_opts = build_ydl_opts(
         out_mp4,
@@ -155,6 +174,7 @@ def download_video(
         player_clients,
         sleep_interval,
         max_sleep_interval,
+        format_selector=format_selector,
     )
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -197,53 +217,59 @@ def download_video_with_fallback(
     out_mp4: Path,
     cookies_file: str,
     cookies_from_browser: str,
-    player_clients: str,
+    player_clients: Optional[str],
     sleep_interval: float,
     max_sleep_interval: float,
 ) -> None:
-    # Attempt 1: caller-configured strategy (typically cookies + web clients).
-    first_error = ""
-    try:
-        download_video(
-            url=url,
-            out_mp4=out_mp4,
-            cookies_file=cookies_file,
-            cookies_from_browser=cookies_from_browser,
-            player_clients=player_clients,
-            sleep_interval=sleep_interval,
-            max_sleep_interval=max_sleep_interval,
-        )
-        return
-    except Exception as exc:
-        first_error = str(exc)
+    attempts = []
+    seen = set()
 
-    # Attempt 2: challenge bypass fallback.
-    # If web+cookies path fails with signature/n-challenge or format-unavailable,
-    # try no-cookies with mobile/tv clients.
-    first_status = classify_video_error(first_error)
-    should_try_mobile_fallback = bool(cookies_file or cookies_from_browser) and first_status in {
-        "fail_challenge_gated",
-        "fail_format_unavailable",
-    }
-    if not should_try_mobile_fallback:
-        raise RuntimeError(first_error)
+    def add_attempt(cfile: str, cfrom: str, clients: Optional[str], fmt: str) -> None:
+        key = (cfile or "", cfrom or "", clients, fmt)
+        if key in seen:
+            return
+        seen.add(key)
+        attempts.append(
+            {
+                "cookies_file": cfile,
+                "cookies_from_browser": cfrom,
+                "player_clients": clients,
+                "format_selector": fmt,
+            }
+        )
 
-    try:
-        download_video(
-            url=url,
-            out_mp4=out_mp4,
-            cookies_file="",
-            cookies_from_browser="",
-            player_clients="android,ios,tv",
-            sleep_interval=sleep_interval,
-            max_sleep_interval=max_sleep_interval,
-        )
-        return
-    except Exception as exc2:
-        second_error = str(exc2)
-        raise RuntimeError(
-            f"{first_error} || fallback_no_cookies_mobile_failed: {second_error}"
-        )
+    # 1) Caller strategy.
+    add_attempt(cookies_file, cookies_from_browser, player_clients, "bv*+ba/best")
+    # 2) No-cookies mobile/tv strategy, robust against web challenge gating.
+    add_attempt("", "", "android,ios,tv", "bv*+ba/best")
+    # 3) Cookie web strategy (if provided), helps with auth-gated videos.
+    if cookies_file or cookies_from_browser:
+        add_attempt(cookies_file, cookies_from_browser, "web,web_safari", "bv*+ba/best")
+    # 4) Final generic fallback with default client resolver and broader format.
+    add_attempt("", "", None, "best")
+
+    errors = []
+    for idx, attempt in enumerate(attempts, start=1):
+        try:
+            download_video(
+                url=url,
+                out_mp4=out_mp4,
+                cookies_file=attempt["cookies_file"],
+                cookies_from_browser=attempt["cookies_from_browser"],
+                player_clients=attempt["player_clients"],
+                sleep_interval=sleep_interval,
+                max_sleep_interval=max_sleep_interval,
+                format_selector=attempt["format_selector"],
+            )
+            return
+        except Exception as exc:
+            msg = str(exc)
+            status = classify_video_error(msg)
+            errors.append(f"attempt{idx}:{status}:{msg}")
+            if status in {"fail_removed", "fail_private", "fail_unavailable", "fail_upcoming"}:
+                break
+
+    raise RuntimeError(" || ".join(errors))
 
 
 def main() -> None:
@@ -266,6 +292,12 @@ def main() -> None:
         type=float,
         default=24.0,
         help="Skip retrying challenge/rate/auth-gated IDs for this many hours",
+    )
+    parser.add_argument(
+        "--upcoming_cooldown_hours",
+        type=float,
+        default=48.0,
+        help="Skip retrying upcoming/premiere videos for this many hours",
     )
     parser.add_argument(
         "--sleep_interval",
@@ -344,6 +376,14 @@ def main() -> None:
                 skipped_cooldown += 1
                 print(f"[video] {idx}/{total} {item.video_id}: skipped_cooldown", flush=True)
                 continue
+            if existing and existing[1] == item.source_hash and existing[3] == "fail_upcoming":
+                ts = parse_iso(existing[2])
+                if ts is not None:
+                    age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
+                    if age_hours < args.upcoming_cooldown_hours:
+                        skipped_cooldown += 1
+                        print(f"[video] {idx}/{total} {item.video_id}: skipped_upcoming_cooldown", flush=True)
+                        continue
             if existing and is_terminal_video_failure(existing, item.source_hash):
                 skipped_terminal += 1
                 print(f"[video] {idx}/{total} {item.video_id}: skipped_terminal", flush=True)

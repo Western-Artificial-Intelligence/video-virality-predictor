@@ -193,13 +193,29 @@ def transcribe_openai_api(audio_path: Path, model_name: str) -> Tuple[str, Dict]
 
     from openai import OpenAI  # type: ignore
 
+    api_model = (model_name or "").strip()
+    # Local Whisper model aliases are not valid for OpenAI API.
+    # Force to whisper-1 unless caller passed a known OpenAI model name.
+    local_aliases = {
+        "",
+        "tiny",
+        "base",
+        "small",
+        "medium",
+        "large",
+        "large-v2",
+        "large-v3",
+    }
+    if api_model.lower() in local_aliases:
+        api_model = "whisper-1"
+
     client = OpenAI(api_key=api_key)
     with audio_path.open("rb") as f:
-        tx = client.audio.transcriptions.create(model=model_name, file=f)
+        tx = client.audio.transcriptions.create(model=api_model, file=f)
     text = (getattr(tx, "text", None) or "").strip()
     return text, {
         "source": "openai_api",
-        "model": model_name,
+        "model": api_model,
         "language": None,
     }
 

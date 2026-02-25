@@ -210,6 +210,7 @@ jobs:
             --cloud_text_prefix "$TEXT_PREFIX"
             --cloud_delete_local_after_upload
             --asr_backend openai_api
+            --asr_model whisper-1
           )
 
           if [ "$MAX_ITEMS" != "0" ]; then

@@ -105,7 +105,6 @@ jobs:
             --cloud_audio_prefix "$AUDIO_PREFIX"
             --cloud_delete_local_after_upload
             --retry 1
-            --challenge_cooldown_hours 24
             --sleep_interval 1.5
             --max_sleep_interval 4.0
           )

@@ -30,15 +30,6 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def parse_iso(value: str) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
 def classify_video_error(error_text: str) -> str:
     msg = (error_text or "").lower()
     if "premieres in" in msg or "this live event will begin" in msg or "upcoming" in msg:
@@ -80,28 +71,6 @@ def is_terminal_video_failure(existing: tuple, item_hash: str) -> bool:
     if existing_hash != item_hash:
         return False
     return status in {"missing", "fail_removed", "fail_private", "fail_unavailable"}
-
-
-def is_cooldown_active(existing: tuple, item_hash: str, cooldown_hours: float) -> bool:
-    # existing tuple schema: (video_id, source_hash, processed_at, status, error)
-    existing_hash = existing[1]
-    processed_at = existing[2]
-    status = existing[3]
-    if existing_hash != item_hash:
-        return False
-    if status not in {
-        "fail_challenge_gated",
-        "fail_rate_limited",
-        "fail_auth",
-        "fail_forbidden",
-        "fail_format_unavailable",
-    }:
-        return False
-    ts = parse_iso(processed_at)
-    if ts is None:
-        return False
-    age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
-    return age_hours < cooldown_hours
 
 
 def build_ydl_opts(
@@ -288,18 +257,6 @@ def main() -> None:
     parser.add_argument("--retry", type=int, default=2)
     parser.add_argument("--retry_delay", type=float, default=1.0)
     parser.add_argument(
-        "--challenge_cooldown_hours",
-        type=float,
-        default=24.0,
-        help="Skip retrying challenge/rate/auth-gated IDs for this many hours",
-    )
-    parser.add_argument(
-        "--upcoming_cooldown_hours",
-        type=float,
-        default=48.0,
-        help="Skip retrying upcoming/premiere videos for this many hours",
-    )
-    parser.add_argument(
         "--sleep_interval",
         type=float,
         default=0.0,
@@ -357,7 +314,6 @@ def main() -> None:
         failed = 0
         skipped_existing = 0
         skipped_terminal = 0
-        skipped_cooldown = 0
         extracted_audio = 0
 
         total = len(delta)
@@ -372,18 +328,6 @@ def main() -> None:
                 skipped_existing += 1
                 print(f"[video] {idx}/{total} {item.video_id}: skipped_existing", flush=True)
                 continue
-            if existing and is_cooldown_active(existing, item.source_hash, args.challenge_cooldown_hours):
-                skipped_cooldown += 1
-                print(f"[video] {idx}/{total} {item.video_id}: skipped_cooldown", flush=True)
-                continue
-            if existing and existing[1] == item.source_hash and existing[3] == "fail_upcoming":
-                ts = parse_iso(existing[2])
-                if ts is not None:
-                    age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
-                    if age_hours < args.upcoming_cooldown_hours:
-                        skipped_cooldown += 1
-                        print(f"[video] {idx}/{total} {item.video_id}: skipped_upcoming_cooldown", flush=True)
-                        continue
             if existing and is_terminal_video_failure(existing, item.source_hash):
                 skipped_terminal += 1
                 print(f"[video] {idx}/{total} {item.video_id}: skipped_terminal", flush=True)
@@ -465,7 +409,6 @@ def main() -> None:
         print(f"extracted_audio: {extracted_audio}")
         print(f"skipped_existing: {skipped_existing}")
         print(f"skipped_terminal: {skipped_terminal}")
-        print(f"skipped_cooldown: {skipped_cooldown}")
         print(f"failed: {failed}")
         print(f"output_dir: {out_dir}")
         print(f"audio_output_dir: {audio_dir}")

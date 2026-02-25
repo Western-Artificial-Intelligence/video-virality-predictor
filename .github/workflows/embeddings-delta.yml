@@ -35,14 +35,14 @@ jobs:
           python-version: "3.11"
       - name: Validate secrets
         run: |
-          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || [ -z "${{ secrets.PINECONE_API_KEY }}" ]; then
+          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
             echo "Missing required secrets for embedding stage"
             exit 1
           fi
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install boto3 pinecone transformers torch av numpy pandas
+          python -m pip install boto3 transformers torch av numpy pandas
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -51,11 +51,10 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
       - name: Run embed video
         env:
-          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          python Data/embeddings/video/embed_video_delta.py \
+          python Data/Embeddings/video/embed_video_delta.py \
             --metadata_csv "$METADATA_CSV" \
             --s3_bucket "$S3_BUCKET" \
             --s3_region "$AWS_REGION" \
@@ -63,7 +62,6 @@ jobs:
             --emb_prefix "$EMB_PREFIX" \
             --state_db state/video_embedding.sqlite \
             --state_s3_key clipfarm/state/video_embedding.sqlite \
-            --pinecone_index clipfarm-video \
             --max_items "$MAX_ITEMS"
 
   embed_audio:
@@ -76,14 +74,14 @@ jobs:
           python-version: "3.11"
       - name: Validate secrets
         run: |
-          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || [ -z "${{ secrets.PINECONE_API_KEY }}" ]; then
+          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
             echo "Missing required secrets for embedding stage"
             exit 1
           fi
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install boto3 pinecone transformers torch librosa numpy pandas
+          python -m pip install boto3 transformers torch librosa numpy pandas
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -92,11 +90,10 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
       - name: Run embed audio
         env:
-          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          python Data/embeddings/audio/embed_audio_delta.py \
+          python Data/Embeddings/audio/embed_audio_delta.py \
             --metadata_csv "$METADATA_CSV" \
             --s3_bucket "$S3_BUCKET" \
             --s3_region "$AWS_REGION" \
@@ -104,7 +101,6 @@ jobs:
             --emb_prefix "$EMB_PREFIX" \
             --state_db state/audio_embedding.sqlite \
             --state_s3_key clipfarm/state/audio_embedding.sqlite \
-            --pinecone_index clipfarm-audio \
             --max_items "$MAX_ITEMS"
 
   embed_text:
@@ -117,14 +113,14 @@ jobs:
           python-version: "3.11"
       - name: Validate secrets
         run: |
-          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || [ -z "${{ secrets.PINECONE_API_KEY }}" ]; then
+          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
             echo "Missing required secrets for embedding stage"
             exit 1
           fi
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install boto3 pinecone sentence-transformers numpy pandas
+          python -m pip install boto3 sentence-transformers numpy pandas
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -133,11 +129,10 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
       - name: Run embed text
         env:
-          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          python Data/embeddings/text/embed_text_delta.py \
+          python Data/Embeddings/text/embed_text_delta.py \
             --metadata_csv "$METADATA_CSV" \
             --s3_bucket "$S3_BUCKET" \
             --s3_region "$AWS_REGION" \
@@ -145,5 +140,4 @@ jobs:
             --emb_prefix "$EMB_PREFIX" \
             --state_db state/text_embedding.sqlite \
             --state_s3_key clipfarm/state/text_embedding.sqlite \
-            --pinecone_index clipfarm-text \
             --max_items "$MAX_ITEMS"

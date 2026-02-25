@@ -46,15 +46,24 @@ ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
 ORIGIN_BRANCH="${ORIGIN_BRANCH:-main}"
 
 COOKIES_FILE="${COOKIES_FILE:-}"
-COOKIES_FROM_BROWSER="${COOKIES_FROM_BROWSER:-chrome}"
+COOKIES_FROM_BROWSER="${COOKIES_FROM_BROWSER:-}"
+AUTO_UPGRADE_YTDLP="${AUTO_UPGRADE_YTDLP:-1}"
 
 VIDEO_RETRY="${VIDEO_RETRY:-1}"
 VIDEO_CHALLENGE_COOLDOWN_HOURS="${VIDEO_CHALLENGE_COOLDOWN_HOURS:-24}"
+VIDEO_UPCOMING_COOLDOWN_HOURS="${VIDEO_UPCOMING_COOLDOWN_HOURS:-48}"
 VIDEO_SLEEP_INTERVAL="${VIDEO_SLEEP_INTERVAL:-1.5}"
 VIDEO_MAX_SLEEP_INTERVAL="${VIDEO_MAX_SLEEP_INTERVAL:-4.0}"
 
 TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-openai_api}"
-TEXT_ASR_MODEL="${TEXT_ASR_MODEL:-small}"
+TEXT_ASR_MODEL="${TEXT_ASR_MODEL:-}"
+if [[ -z "$TEXT_ASR_MODEL" ]]; then
+  if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]]; then
+    TEXT_ASR_MODEL="whisper-1"
+  else
+    TEXT_ASR_MODEL="small"
+  fi
+fi
 
 VIDEO_STATE_DB="${VIDEO_STATE_DB:-state/video_downloader.sqlite}"
 TEXT_STATE_DB="${TEXT_STATE_DB:-state/text_downloader.sqlite}"
@@ -98,6 +107,11 @@ fi
 if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]] && [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "ERROR: OPENAI_API_KEY is required when TEXT_ASR_BACKEND=openai_api"
   exit 1
+fi
+
+if [[ "$AUTO_UPGRADE_YTDLP" == "1" ]]; then
+  echo "[deps] upgrading yt-dlp in $_PYTHON_BIN environment"
+  "$_PYTHON_BIN" -m pip install -q -U yt-dlp || echo "[deps] warning: yt-dlp auto-upgrade failed; continuing with installed version"
 fi
 
 restore_state() {
@@ -160,6 +174,7 @@ video_args=(
   --cloud_delete_local_after_upload
   --retry "$VIDEO_RETRY"
   --challenge_cooldown_hours "$VIDEO_CHALLENGE_COOLDOWN_HOURS"
+  --upcoming_cooldown_hours "$VIDEO_UPCOMING_COOLDOWN_HOURS"
   --sleep_interval "$VIDEO_SLEEP_INTERVAL"
   --max_sleep_interval "$VIDEO_MAX_SLEEP_INTERVAL"
 )
@@ -176,6 +191,7 @@ fi
 
 echo "[video] starting downloader"
 echo "[env] python_bin=$_PYTHON_BIN"
+echo "[env] cookies_file=${COOKIES_FILE:-<none>} cookies_from_browser=${COOKIES_FROM_BROWSER:-<none>}"
 video_cmd=("$_PYTHON_BIN" "${video_args[@]}")
 PYTHONUNBUFFERED=1 "${video_cmd[@]}"
 

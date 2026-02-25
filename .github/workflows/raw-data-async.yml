@@ -11,7 +11,7 @@ on:
       max_items:
         description: "Optional cap for this run (0 = no cap)"
         required: false
-        default: "0"
+        default: "100"
 
 permissions:
   contents: read
@@ -27,21 +27,26 @@ env:
   VIDEO_PREFIX: video
   AUDIO_PREFIX: audio
   TEXT_PREFIX: text
-  DEFAULT_BRANCH: main
 
 jobs:
   video_audio:
     if: >-
       github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == env.DEFAULT_BRANCH)
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
-      MAX_ITEMS: ${{ github.event.inputs.max_items || '0' }}
+      MAX_ITEMS: ${{ github.event.inputs.max_items || '100' }}
       YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
+      YTDLP_COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Use branch tip (not event SHA) so metadata CSV committed by Horizon Collector
+          # is visible to this workflow run.
+          ref: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          fetch-depth: 0
 
       - name: Validate required secrets
         run: |
@@ -74,8 +79,18 @@ jobs:
 
       - name: Prepare yt-dlp cookies file (optional)
         run: |
-          if [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
+          if [ -n "${YTDLP_COOKIES_B64:-}" ]; then
+            printf "%s" "$YTDLP_COOKIES_B64" | base64 -d > /tmp/youtube_cookies.txt
+          elif [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
             printf "%s\n" "$YTDLP_COOKIES_TXT" > /tmp/youtube_cookies.txt
+          fi
+
+          if [ -f /tmp/youtube_cookies.txt ]; then
+            echo "cookies_file_present=yes"
+            echo "cookies_line_count=$(wc -l < /tmp/youtube_cookies.txt)"
+            echo "cookies_header=$(head -n 1 /tmp/youtube_cookies.txt)"
+          else
+            echo "cookies_file_present=no"
           fi
 
       - name: Run video+audio downloader
@@ -89,6 +104,10 @@ jobs:
             --cloud_video_prefix "$VIDEO_PREFIX"
             --cloud_audio_prefix "$AUDIO_PREFIX"
             --cloud_delete_local_after_upload
+            --retry 1
+            --challenge_cooldown_hours 24
+            --sleep_interval 1.5
+            --max_sleep_interval 4.0
           )
 
           if [ "$MAX_ITEMS" != "0" ]; then
@@ -109,18 +128,26 @@ jobs:
           fi
 
   text:
+    needs: [video_audio]
     if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == env.DEFAULT_BRANCH)
+      needs.video_audio.result == 'success' &&
+      (
+        github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+      )
     runs-on: ubuntu-latest
     env:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
-      MAX_ITEMS: ${{ github.event.inputs.max_items || '0' }}
+      MAX_ITEMS: ${{ github.event.inputs.max_items || '100' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       YTDLP_COOKIES_TXT: ${{ secrets.YTDLP_COOKIES_TXT }}
+      YTDLP_COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          fetch-depth: 0
 
       - name: Validate required secrets
         run: |
@@ -157,8 +184,18 @@ jobs:
 
       - name: Prepare yt-dlp cookies file (optional)
         run: |
-          if [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
+          if [ -n "${YTDLP_COOKIES_B64:-}" ]; then
+            printf "%s" "$YTDLP_COOKIES_B64" | base64 -d > /tmp/youtube_cookies.txt
+          elif [ -n "${YTDLP_COOKIES_TXT:-}" ]; then
             printf "%s\n" "$YTDLP_COOKIES_TXT" > /tmp/youtube_cookies.txt
+          fi
+
+          if [ -f /tmp/youtube_cookies.txt ]; then
+            echo "cookies_file_present=yes"
+            echo "cookies_line_count=$(wc -l < /tmp/youtube_cookies.txt)"
+            echo "cookies_header=$(head -n 1 /tmp/youtube_cookies.txt)"
+          else
+            echo "cookies_file_present=no"
           fi
 
       - name: Run text collector

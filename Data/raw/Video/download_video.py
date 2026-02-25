@@ -40,6 +40,12 @@ def parse_iso(value: str) -> datetime | None:
 
 def classify_video_error(error_text: str) -> str:
     msg = (error_text or "").lower()
+    if "video unavailable. this video has been removed by the uploader" in msg:
+        return "fail_removed"
+    if "video unavailable. this video is private" in msg:
+        return "fail_private"
+    if "video unavailable" in msg or "this video is not available" in msg:
+        return "fail_unavailable"
     if "only images are available" in msg or "signature solving failed" in msg or "n challenge solving failed" in msg:
         return "fail_challenge_gated"
     if "http error 429" in msg or "too many requests" in msg:
@@ -57,6 +63,15 @@ def classify_video_error(error_text: str) -> str:
     if "cloud_upload_failed" in msg:
         return "fail_cloud_upload"
     return "fail"
+
+
+def is_terminal_video_failure(existing: tuple, item_hash: str) -> bool:
+    # existing tuple schema: (video_id, source_hash, processed_at, status, error)
+    existing_hash = existing[1]
+    status = existing[3]
+    if existing_hash != item_hash:
+        return False
+    return status in {"missing", "fail_removed", "fail_private", "fail_unavailable"}
 
 
 def is_cooldown_active(existing: tuple, item_hash: str, cooldown_hours: float) -> bool:
@@ -80,6 +95,8 @@ def build_ydl_opts(
     cookies_file: str,
     cookies_from_browser: str,
     player_clients: str,
+    sleep_interval: float,
+    max_sleep_interval: float,
 ) -> dict:
     out_tmpl = str(out_mp4.with_suffix(".%(ext)s"))
     clients = [c.strip() for c in (player_clients or "").split(",") if c.strip()]
@@ -105,11 +122,20 @@ def build_ydl_opts(
         "extractor_args": {"youtube": {"player_client": clients}},
         # Be conservative on fragment parallelism to reduce mid-stream 403s.
         "concurrent_fragment_downloads": 1,
+        # Prevent long hangs on problematic IDs.
+        "socket_timeout": 20,
+        "retries": 1,
+        "fragment_retries": 1,
     }
     if cookies_file:
         ydl_opts["cookiefile"] = cookies_file
     if cookies_from_browser:
         ydl_opts["cookiesfrombrowser"] = (cookies_from_browser,)
+    if sleep_interval > 0:
+        ydl_opts["sleep_interval"] = sleep_interval
+        ydl_opts["sleep_interval_requests"] = sleep_interval
+        if max_sleep_interval > sleep_interval:
+            ydl_opts["max_sleep_interval"] = max_sleep_interval
     return ydl_opts
 
 
@@ -119,8 +145,17 @@ def download_video(
     cookies_file: str,
     cookies_from_browser: str,
     player_clients: str,
+    sleep_interval: float,
+    max_sleep_interval: float,
 ) -> None:
-    ydl_opts = build_ydl_opts(out_mp4, cookies_file, cookies_from_browser, player_clients)
+    ydl_opts = build_ydl_opts(
+        out_mp4,
+        cookies_file,
+        cookies_from_browser,
+        player_clients,
+        sleep_interval,
+        max_sleep_interval,
+    )
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
@@ -163,6 +198,8 @@ def download_video_with_fallback(
     cookies_file: str,
     cookies_from_browser: str,
     player_clients: str,
+    sleep_interval: float,
+    max_sleep_interval: float,
 ) -> None:
     # Attempt 1: caller-configured strategy (typically cookies + web clients).
     first_error = ""
@@ -173,6 +210,8 @@ def download_video_with_fallback(
             cookies_file=cookies_file,
             cookies_from_browser=cookies_from_browser,
             player_clients=player_clients,
+            sleep_interval=sleep_interval,
+            max_sleep_interval=max_sleep_interval,
         )
         return
     except Exception as exc:
@@ -185,7 +224,6 @@ def download_video_with_fallback(
     should_try_mobile_fallback = bool(cookies_file or cookies_from_browser) and first_status in {
         "fail_challenge_gated",
         "fail_format_unavailable",
-        "fail_auth",
     }
     if not should_try_mobile_fallback:
         raise RuntimeError(first_error)
@@ -197,6 +235,8 @@ def download_video_with_fallback(
             cookies_file="",
             cookies_from_browser="",
             player_clients="android,ios,tv",
+            sleep_interval=sleep_interval,
+            max_sleep_interval=max_sleep_interval,
         )
         return
     except Exception as exc2:
@@ -226,6 +266,18 @@ def main() -> None:
         type=float,
         default=24.0,
         help="Skip retrying challenge/rate/auth-gated IDs for this many hours",
+    )
+    parser.add_argument(
+        "--sleep_interval",
+        type=float,
+        default=0.0,
+        help="Seconds to sleep between yt-dlp HTTP requests/downloads (helps reduce bot/rate triggers)",
+    )
+    parser.add_argument(
+        "--max_sleep_interval",
+        type=float,
+        default=0.0,
+        help="Max randomized sleep interval for yt-dlp when sleep_interval is set",
     )
     parser.add_argument("--include_captured_at_in_hash", action="store_true")
     parser.add_argument("--cookies_file", default="", help="Path to Netscape cookies.txt for yt-dlp")
@@ -272,10 +324,13 @@ def main() -> None:
         success = 0
         failed = 0
         skipped_existing = 0
+        skipped_terminal = 0
         skipped_cooldown = 0
         extracted_audio = 0
 
-        for item in delta:
+        total = len(delta)
+        for idx, item in enumerate(delta, start=1):
+            print(f"[video] {idx}/{total} {item.video_id}: start", flush=True)
             out_mp4 = out_dir / f"{item.video_id}.mp4"
             wav_path = audio_dir / f"{item.video_id}.wav"
             existing = state.get(item.video_id)
@@ -283,14 +338,21 @@ def main() -> None:
             if outputs_ready and existing and existing[3] == "success":
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "success", "skipped_existing")
                 skipped_existing += 1
+                print(f"[video] {idx}/{total} {item.video_id}: skipped_existing", flush=True)
                 continue
             if existing and is_cooldown_active(existing, item.source_hash, args.challenge_cooldown_hours):
                 skipped_cooldown += 1
+                print(f"[video] {idx}/{total} {item.video_id}: skipped_cooldown", flush=True)
+                continue
+            if existing and is_terminal_video_failure(existing, item.source_hash):
+                skipped_terminal += 1
+                print(f"[video] {idx}/{total} {item.video_id}: skipped_terminal", flush=True)
                 continue
 
             if not item.video_url:
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "missing", "missing_url")
                 failed += 1
+                print(f"[video] {idx}/{total} {item.video_id}: missing_url", flush=True)
                 continue
 
             done = False
@@ -304,6 +366,8 @@ def main() -> None:
                             cookies_file=args.cookies_file,
                             cookies_from_browser=args.cookies_from_browser,
                             player_clients=args.player_clients,
+                            sleep_interval=args.sleep_interval,
+                            max_sleep_interval=args.max_sleep_interval,
                         )
                         done = True
                         break
@@ -311,7 +375,14 @@ def main() -> None:
                         error_text = str(exc)
                         status = classify_video_error(error_text)
                         # Deterministic/gated failures should not be retried immediately.
-                        if status in {"fail_challenge_gated", "fail_format_unavailable", "fail_auth"}:
+                        if status in {
+                            "fail_challenge_gated",
+                            "fail_format_unavailable",
+                            "fail_auth",
+                            "fail_removed",
+                            "fail_private",
+                            "fail_unavailable",
+                        }:
                             break
                         if attempt <= args.retry:
                             time.sleep(args.retry_delay * attempt)
@@ -341,9 +412,11 @@ def main() -> None:
                 fail_status = classify_video_error(error_text)
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), fail_status, error_text)
                 failed += 1
+                print(f"[video] {idx}/{total} {item.video_id}: {fail_status}", flush=True)
             else:
                 state.upsert(item.video_id, item.source_hash, utc_now_iso(), "success", "")
                 success += 1
+                print(f"[video] {idx}/{total} {item.video_id}: success", flush=True)
 
         print("Video downloader summary")
         print(f"metadata_rows_deduped: {len(items)}")
@@ -351,6 +424,7 @@ def main() -> None:
         print(f"success: {success}")
         print(f"extracted_audio: {extracted_audio}")
         print(f"skipped_existing: {skipped_existing}")
+        print(f"skipped_terminal: {skipped_terminal}")
         print(f"skipped_cooldown: {skipped_cooldown}")
         print(f"failed: {failed}")
         print(f"output_dir: {out_dir}")

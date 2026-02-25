@@ -88,12 +88,13 @@ plutil -p ~/Library/LaunchAgents/com.clipfarm.horizon-collector.plist
   - Manual run (`workflow_dispatch`)
 - Runtime behavior:
   - Installs minimal collector dependency (`requests`)
-  - Writes `credentials.py` from GitHub secret `YOUTUBE_API_KEY`
+  - Writes `credentials.py` from GitHub secret `YOUTUBE_API_KEY` (or first key in `YOUTUBE_API_KEYS`)
+  - If `YOUTUBE_API_KEYS` is provided (comma/newline separated), collector can rotate keys on quota/rate errors
   - Runs `python Data/raw/Metadata/daily_horizon_collector.py --channel-median-sample 0`
 
 **GitHub Secrets Required**
 - Always required:
-  - `YOUTUBE_API_KEY`
+  - `YOUTUBE_API_KEY` (single key) OR `YOUTUBE_API_KEYS` (multi-key rotation)
 - Required only for S3 persistence mode:
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
@@ -228,13 +229,13 @@ pip install google-cloud-storage
   - `/video-virality-predictor/.github/workflows/raw-data-async.yml`
 - Trigger:
   - Runs after `Horizon Collector` completes (`workflow_run`), plus every 6 hours, plus manual.
-- Jobs are asynchronous:
+- Job order:
   - `video_audio` uploads video and extracted audio to cloud.
-  - `text` runs independently and will fetch audio from cloud when local audio is missing.
-- Why this works asynchronously:
+  - `text` runs after `video_audio` and can fetch missing audio from cloud when needed.
+- Why this works reliably:
   - Each script has its own state DB (`video_downloader.sqlite`, `text_downloader.sqlite`).
   - Non-terminal statuses stay in delta and are retried in future runs.
-  - Jobs do not require shared local disk across runs.
+  - State DBs are restored from S3 at job start and persisted back to S3 at job end.
 
 **Required Secrets for raw-data-async.yml**
 - S3 mode:
@@ -249,34 +250,44 @@ pip install google-cloud-storage
   - `OPENAI_API_KEY`
 - Optional yt-dlp auth:
   - `YTDLP_COOKIES_TXT` (Netscape cookies content)
+  - `YTDLP_COOKIES_B64` (base64-encoded Netscape cookies; preferred for multiline safety)
 
 **Workflow Cloud Settings**
 - In `/video-virality-predictor/.github/workflows/raw-data-async.yml`:
-  - `CLOUD_PROVIDER`: `s3` or `gcs`
   - `RAW_PREFIX`: cloud path prefix for raw artifacts
   - `STATE_PREFIX`: cloud path prefix for sqlite state files
 
-**Embedding -> Fusion -> Training (S3 + Pinecone)**
+**Local Raw Runner (Fallback for YouTube Auth Blocks)**
+- Script:
+  - `/video-virality-predictor/scripts/run_raw_pipeline_local.sh`
+- What it does:
+  - Optionally syncs latest `Data/raw/Metadata/shorts_metadata_horizon.csv` from `origin/main`.
+  - Restores `video_downloader.sqlite` and `text_downloader.sqlite` from S3.
+  - Runs video+audio downloader, then text collector.
+  - Persists updated state DBs back to S3 on exit.
+- Required env vars:
+  - `S3_BUCKET`
+  - `OPENAI_API_KEY` (if using `TEXT_ASR_BACKEND=openai_api`)
+- Optional env vars:
+  - `MAX_ITEMS` (default `100`)
+  - `COOKIES_FILE` or `COOKIES_FROM_BROWSER` (default `chrome`)
+  - `SYNC_METADATA_FROM_ORIGIN` (default `1`)
+- Example:
+```bash
+cd /video-virality-predictor
+export S3_BUCKET=your-bucket
+export OPENAI_API_KEY=...
+./scripts/run_raw_pipeline_local.sh
+```
+
+**Embedding -> Fusion -> Training (S3-only Embeddings)**
 - Linear workflow file:
-  - `/video-virality-predictor/.github/workflows/embed-fuse-train.yml`
+  - `/video-virality-predictor/.github/workflows/embeddings-delta.yml`
+  - `/video-virality-predictor/.github/workflows/fusion-delta.yml`
+  - `/video-virality-predictor/.github/workflows/train-from-fusion.yml`
 - Stage scripts:
-  - `/video-virality-predictor/Data/embeddings/video/embed_video_delta.py`
-  - `/video-virality-predictor/Data/embeddings/audio/embed_audio_delta.py`
-  - `/video-virality-predictor/Data/embeddings/text/embed_text_delta.py`
+  - `/video-virality-predictor/Data/Embeddings/video/embed_video_delta.py`
+  - `/video-virality-predictor/Data/Embeddings/audio/embed_audio_delta.py`
+  - `/video-virality-predictor/Data/Embeddings/text/embed_text_delta.py`
   - `/video-virality-predictor/Data/common/fuse_embeddings_delta.py`
   - `/video-virality-predictor/Super_Predict/train_from_horizon.py`
-
-**Pinecone Contract**
-- Indexes:
-  - `clipfarm-video`
-  - `clipfarm-audio`
-  - `clipfarm-text`
-- Vector IDs:
-  - `video:<video_id>`
-  - `audio:<video_id>`
-  - `text:<video_id>`
-- Metadata payload:
-  - Full row metadata with truncation guardrails.
-
-**Additional Required Secret**
-- `PINECONE_API_KEY`

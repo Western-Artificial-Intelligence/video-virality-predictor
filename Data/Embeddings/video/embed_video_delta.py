@@ -1,4 +1,4 @@
-"""Delta video embedding stage: S3 raw mp4 -> VideoMAE embedding -> S3 + Pinecone."""
+"""Delta video embedding stage: S3 raw mp4 -> VideoMAE embedding -> S3."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
 from Data.common.horizon_delta import DEFAULT_METADATA_CSV, load_latest_horizon_rows  # noqa: E402
-from Data.common.pinecone_client import PineconeVectorClient, build_full_metadata  # noqa: E402
 from Data.common.s3_artifact_store import S3ArtifactStore  # noqa: E402
 from Data.common.stage_state import StageStateDB, compute_stage_delta  # noqa: E402
 
@@ -25,7 +24,6 @@ DEFAULT_STATE_DB = REPO_ROOT / "state" / "video_embedding.sqlite"
 DEFAULT_STATE_S3_KEY = "clipfarm/state/video_embedding.sqlite"
 DEFAULT_RAW_PREFIX = "clipfarm/raw"
 DEFAULT_EMB_PREFIX = "clipfarm/embeddings"
-DEFAULT_INDEX = "clipfarm-video"
 DEFAULT_MODEL = "MCG-NJU/videomae-base"
 
 
@@ -62,7 +60,7 @@ class VideoEmbedder:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Embed video deltas from S3 and upsert to Pinecone")
+    parser = argparse.ArgumentParser(description="Embed video deltas from S3 and store embeddings on S3")
     parser.add_argument("--metadata_csv", default=str(DEFAULT_METADATA_CSV))
     parser.add_argument("--s3_bucket", default=os.getenv("S3_BUCKET", ""))
     parser.add_argument("--s3_region", default=os.getenv("AWS_REGION", ""))
@@ -70,8 +68,6 @@ def main() -> None:
     parser.add_argument("--emb_prefix", default=DEFAULT_EMB_PREFIX)
     parser.add_argument("--state_db", default=str(DEFAULT_STATE_DB))
     parser.add_argument("--state_s3_key", default=DEFAULT_STATE_S3_KEY)
-    parser.add_argument("--pinecone_index", default=DEFAULT_INDEX)
-    parser.add_argument("--pinecone_api_key", default=os.getenv("PINECONE_API_KEY", ""))
     parser.add_argument("--model_name", default=DEFAULT_MODEL)
     parser.add_argument("--num_frames", type=int, default=16)
     parser.add_argument("--max_items", type=int, default=0)
@@ -82,7 +78,6 @@ def main() -> None:
     state_path = Path(args.state_db)
     s3.restore_state_if_exists(args.state_s3_key, state_path)
     state = StageStateDB(state_path)
-    pinecone = PineconeVectorClient(api_key=args.pinecone_api_key, index_name=args.pinecone_index)
     embedder = VideoEmbedder(args.model_name)
 
     try:
@@ -101,7 +96,6 @@ def main() -> None:
             for item in delta:
                 raw_key = f"{args.raw_prefix.strip('/')}/video/{item.video_id}.mp4"
                 emb_key = f"{args.emb_prefix.strip('/')}/video/{item.video_id}.npy"
-                vector_id = f"video:{item.video_id}"
 
                 if not s3.exists(raw_key):
                     state.upsert(
@@ -110,7 +104,7 @@ def main() -> None:
                         status="missing_raw_object",
                         error=f"s3_missing:{raw_key}",
                         artifact_key="",
-                        vector_id=vector_id,
+                        vector_id="",
                     )
                     missing_raw += 1
                     continue
@@ -123,26 +117,13 @@ def main() -> None:
                     np.save(local_npy, emb)
                     s3.upload_file(local_npy, emb_key)
 
-                    metadata = build_full_metadata(
-                        item.row,
-                        mandatory={
-                            "video_id": item.video_id,
-                            "captured_at": item.captured_at,
-                            "source_hash": item.source_hash,
-                            "s3_key": emb_key,
-                            "modality": "video",
-                            "horizon_days": item.row.get("horizon_days", ""),
-                        },
-                    )
-                    pinecone.upsert(vector_id=vector_id, values=emb.tolist(), metadata=metadata)
-
                     state.upsert(
                         item.video_id,
                         item.source_hash,
                         status="success",
                         error="",
                         artifact_key=emb_key,
-                        vector_id=vector_id,
+                        vector_id="",
                     )
                     success += 1
                 except Exception as exc:
@@ -152,7 +133,7 @@ def main() -> None:
                         status="fail",
                         error=str(exc),
                         artifact_key="",
-                        vector_id=vector_id,
+                        vector_id="",
                     )
                     failed += 1
                 finally:

@@ -32,6 +32,10 @@ DEFAULT_AUDIO_DIR = REPO_ROOT / "Data" / "raw" / "Audio" / "raw_data"
 DEFAULT_STATE_DB = REPO_ROOT / "state" / "text_downloader.sqlite"
 PREFERRED_LANGS = ["en", "en-US", "en-GB"]
 
+_FW_MODELS: Dict[str, object] = {}
+_WHISPER_MODELS: Dict[str, object] = {}
+_OPENAI_CLIENT = None
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -156,7 +160,10 @@ def try_caption_first(url: str, video_id: str, opts: Dict) -> Tuple[Optional[str
 def transcribe_faster_whisper(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
     from faster_whisper import WhisperModel  # type: ignore
 
-    model = WhisperModel(model_name, device="auto", compute_type="int8")
+    model = _FW_MODELS.get(model_name)
+    if model is None:
+        model = WhisperModel(model_name, device="auto", compute_type="int8")
+        _FW_MODELS[model_name] = model
     segments, info = model.transcribe(str(audio_path), vad_filter=True)
     text = "".join(seg.text for seg in segments).strip()
     return text, {
@@ -169,7 +176,10 @@ def transcribe_faster_whisper(audio_path: Path, model_name: str) -> Tuple[str, D
 def transcribe_openai_whisper(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
     import whisper  # type: ignore
 
-    model = whisper.load_model(model_name)
+    model = _WHISPER_MODELS.get(model_name)
+    if model is None:
+        model = whisper.load_model(model_name)
+        _WHISPER_MODELS[model_name] = model
     result = model.transcribe(str(audio_path))
     text = (result.get("text") or "").strip()
     return text, {
@@ -180,6 +190,7 @@ def transcribe_openai_whisper(audio_path: Path, model_name: str) -> Tuple[str, D
 
 
 def transcribe_openai_api(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
+    global _OPENAI_CLIENT
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         try:
@@ -209,7 +220,9 @@ def transcribe_openai_api(audio_path: Path, model_name: str) -> Tuple[str, Dict]
     if api_model.lower() in local_aliases:
         api_model = "whisper-1"
 
-    client = OpenAI(api_key=api_key)
+    if _OPENAI_CLIENT is None:
+        _OPENAI_CLIENT = OpenAI(api_key=api_key)
+    client = _OPENAI_CLIENT
     with audio_path.open("rb") as f:
         tx = client.audio.transcriptions.create(model=api_model, file=f)
     text = (getattr(tx, "text", None) or "").strip()

@@ -1,0 +1,107 @@
+name: Text Raw Delta
+
+on:
+  schedule:
+    # Every 6 hours (UTC)
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      max_items:
+        description: "Optional cap for this run (0 = no cap)"
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: text-raw-delta
+  cancel-in-progress: false
+
+env:
+  METADATA_CSV: Data/raw/Metadata/shorts_metadata_horizon.csv
+  RAW_PREFIX: clipfarm/raw
+  STATE_PREFIX: clipfarm/state
+  AUDIO_PREFIX: audio
+  TEXT_PREFIX: text
+
+jobs:
+  text:
+    runs-on: ubuntu-latest
+    env:
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      MAX_ITEMS: ${{ github.event.inputs.max_items || '0' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "$S3_BUCKET" ]; then
+            echo "Missing one or more required AWS secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET"
+            exit 1
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install yt-dlp requests boto3 faster-whisper
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Restore text state
+        run: |
+          mkdir -p state
+          aws s3 cp "s3://$S3_BUCKET/${STATE_PREFIX}/text_downloader.sqlite" state/text_downloader.sqlite || true
+
+      - name: Run text collector (ASR-first)
+        run: |
+          CLOUD_ROOT_URI="s3://$S3_BUCKET/${RAW_PREFIX}"
+
+          args=(
+            --metadata_csv "$METADATA_CSV"
+            --state_db state/text_downloader.sqlite
+            --cloud_root_uri "$CLOUD_ROOT_URI"
+            --cloud_audio_prefix "$AUDIO_PREFIX"
+            --cloud_text_prefix "$TEXT_PREFIX"
+            --cloud_delete_local_after_upload
+            --asr_backend faster_whisper
+            --asr_model small
+            --no-caption_first
+          )
+
+          if [ "$MAX_ITEMS" != "0" ]; then
+            args+=(--max_items "$MAX_ITEMS")
+          fi
+
+          python Data/raw/Text/text_collect.py "${args[@]}"
+
+      - name: Persist text state
+        if: always()
+        run: |
+          if [ -f state/text_downloader.sqlite ]; then
+            target="s3://$S3_BUCKET/${STATE_PREFIX}/text_downloader.sqlite"
+            for i in 1 2 3 4 5; do
+              if aws s3 cp state/text_downloader.sqlite "$target"; then
+                echo "state_upload=success attempt=$i target=$target"
+                exit 0
+              fi
+              sleep $((i * 2))
+            done
+            echo "ERROR: failed to upload text state after retries: $target"
+            exit 1
+          else
+            echo "WARNING: state/text_downloader.sqlite not found; nothing to persist"
+          fi

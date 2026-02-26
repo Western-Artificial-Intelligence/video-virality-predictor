@@ -268,7 +268,12 @@ def main() -> None:
     parser.add_argument("--audio_dir", default=str(DEFAULT_AUDIO_DIR))
     parser.add_argument("--max_items", type=int, default=0)
     parser.add_argument("--include_captured_at_in_hash", action="store_true")
-    parser.add_argument("--caption_first", action="store_true", default=True, help="Try YouTube captions before ASR")
+    parser.add_argument(
+        "--caption_first",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Try YouTube captions before ASR",
+    )
     parser.add_argument("--cookies_file", default="", help="Path to Netscape cookies.txt for caption extraction")
     parser.add_argument(
         "--cookies_from_browser",

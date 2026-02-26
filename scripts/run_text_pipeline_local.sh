@@ -34,6 +34,7 @@ AUDIO_PREFIX="${AUDIO_PREFIX:-audio}"
 TEXT_PREFIX="${TEXT_PREFIX:-text}"
 
 MAX_ITEMS="${MAX_ITEMS:-0}"
+TEXT_MAX_WORKERS="${TEXT_MAX_WORKERS:-4}"
 SYNC_METADATA_FROM_ORIGIN="${SYNC_METADATA_FROM_ORIGIN:-1}"
 ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
 ORIGIN_BRANCH="${ORIGIN_BRANCH:-main}"
@@ -97,6 +98,11 @@ if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]] && [[ -z "${OPENAI_API_KEY:-}" ]]; 
   exit 1
 fi
 
+if ! [[ "$TEXT_MAX_WORKERS" =~ ^[0-9]+$ ]] || [[ "$TEXT_MAX_WORKERS" -lt 1 ]]; then
+  echo "ERROR: TEXT_MAX_WORKERS must be a positive integer (current: $TEXT_MAX_WORKERS)"
+  exit 1
+fi
+
 if [[ "$AUTO_UPGRADE_YTDLP" == "1" ]]; then
   echo "[deps] upgrading yt-dlp in $_PYTHON_BIN environment"
   "$_PYTHON_BIN" -m pip install -q -U yt-dlp || echo "[deps] warning: yt-dlp auto-upgrade failed; continuing"
@@ -157,6 +163,7 @@ text_args=(
   --cloud_delete_local_after_upload
   --asr_backend "$TEXT_ASR_BACKEND"
   --asr_model "$TEXT_ASR_MODEL"
+  --max_workers "$TEXT_MAX_WORKERS"
 )
 
 if [[ "$MAX_ITEMS" != "0" ]]; then
@@ -170,7 +177,7 @@ elif [[ -n "$COOKIES_FROM_BROWSER" ]]; then
 fi
 
 echo "[text] starting collector"
-echo "[env] python_bin=$_PYTHON_BIN asr_backend=${TEXT_ASR_BACKEND} asr_model=${TEXT_ASR_MODEL}"
+echo "[env] python_bin=$_PYTHON_BIN asr_backend=${TEXT_ASR_BACKEND} asr_model=${TEXT_ASR_MODEL} max_workers=${TEXT_MAX_WORKERS}"
 text_cmd=("$_PYTHON_BIN" "${text_args[@]}")
 PYTHONUNBUFFERED=1 "${text_cmd[@]}"
 

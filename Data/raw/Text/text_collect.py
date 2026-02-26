@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -31,10 +32,8 @@ DEFAULT_TEXT_DIR = REPO_ROOT / "Data" / "raw" / "Text" / "raw_data"
 DEFAULT_AUDIO_DIR = REPO_ROOT / "Data" / "raw" / "Audio" / "raw_data"
 DEFAULT_STATE_DB = REPO_ROOT / "state" / "text_downloader.sqlite"
 PREFERRED_LANGS = ["en", "en-US", "en-GB"]
-
-_FW_MODELS: Dict[str, object] = {}
-_WHISPER_MODELS: Dict[str, object] = {}
-_OPENAI_CLIENT = None
+DEFAULT_MAX_WORKERS = max(1, min(os.cpu_count() or 1, 4))
+_THREAD_LOCAL = __import__("threading").local()
 
 
 def utc_now_iso() -> str:
@@ -160,10 +159,15 @@ def try_caption_first(url: str, video_id: str, opts: Dict) -> Tuple[Optional[str
 def transcribe_faster_whisper(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
     from faster_whisper import WhisperModel  # type: ignore
 
-    model = _FW_MODELS.get(model_name)
+    fw_models = getattr(_THREAD_LOCAL, "fw_models", None)
+    if fw_models is None:
+        fw_models = {}
+        _THREAD_LOCAL.fw_models = fw_models
+
+    model = fw_models.get(model_name)
     if model is None:
         model = WhisperModel(model_name, device="auto", compute_type="int8")
-        _FW_MODELS[model_name] = model
+        fw_models[model_name] = model
     segments, info = model.transcribe(str(audio_path), vad_filter=True)
     text = "".join(seg.text for seg in segments).strip()
     return text, {
@@ -176,10 +180,15 @@ def transcribe_faster_whisper(audio_path: Path, model_name: str) -> Tuple[str, D
 def transcribe_openai_whisper(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
     import whisper  # type: ignore
 
-    model = _WHISPER_MODELS.get(model_name)
+    whisper_models = getattr(_THREAD_LOCAL, "whisper_models", None)
+    if whisper_models is None:
+        whisper_models = {}
+        _THREAD_LOCAL.whisper_models = whisper_models
+
+    model = whisper_models.get(model_name)
     if model is None:
         model = whisper.load_model(model_name)
-        _WHISPER_MODELS[model_name] = model
+        whisper_models[model_name] = model
     result = model.transcribe(str(audio_path))
     text = (result.get("text") or "").strip()
     return text, {
@@ -190,7 +199,6 @@ def transcribe_openai_whisper(audio_path: Path, model_name: str) -> Tuple[str, D
 
 
 def transcribe_openai_api(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
-    global _OPENAI_CLIENT
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         try:
@@ -220,9 +228,10 @@ def transcribe_openai_api(audio_path: Path, model_name: str) -> Tuple[str, Dict]
     if api_model.lower() in local_aliases:
         api_model = "whisper-1"
 
-    if _OPENAI_CLIENT is None:
-        _OPENAI_CLIENT = OpenAI(api_key=api_key)
-    client = _OPENAI_CLIENT
+    client = getattr(_THREAD_LOCAL, "openai_client", None)
+    if client is None:
+        client = OpenAI(api_key=api_key)
+        _THREAD_LOCAL.openai_client = client
     with audio_path.open("rb") as f:
         tx = client.audio.transcriptions.create(model=api_model, file=f)
     text = (getattr(tx, "text", None) or "").strip()
@@ -273,6 +282,137 @@ def as_bool(value) -> bool:
     return s in {"1", "true", "t", "yes", "y"}
 
 
+def process_text_item(
+    item,
+    args: argparse.Namespace,
+    caption_opts: Dict,
+    out_dir: Path,
+    audio_dir: Path,
+) -> Dict[str, str]:
+    out_path = out_dir / f"{item.video_id}.json"
+    uploader = CloudUploader(args.cloud_root_uri)
+
+    try:
+        text = ""
+        meta: Dict = {
+            "source": None,
+            "model": None,
+            "language": None,
+            "caption_status": None,
+            "caption_lang": None,
+            "caption_is_auto": False,
+        }
+        caption_error = ""
+        caption_available = as_bool(item.row.get("caption_available"))
+
+        if args.caption_first and caption_available:
+            try:
+                cap_text, cap_meta = try_caption_first(item.video_url, item.video_id, caption_opts)
+                meta.update(cap_meta)
+                if cap_text:
+                    text = cap_text
+                    meta["source"] = "youtube_caption"
+            except Exception as cap_exc:
+                caption_error = str(cap_exc)
+                meta["caption_status"] = "error"
+        elif args.caption_first and not caption_available:
+            meta["caption_status"] = "metadata_no_captions"
+
+        if not text:
+            wav_path = audio_dir / f"{item.video_id}.wav"
+            downloaded_audio = False
+            if not wav_path.exists() and uploader.enabled and args.download_audio_from_cloud_if_missing:
+                try:
+                    uploader.download_file(
+                        f"{args.cloud_audio_prefix.strip('/')}/{item.video_id}.wav",
+                        wav_path,
+                    )
+                    downloaded_audio = True
+                except Exception:
+                    downloaded_audio = False
+
+            if not wav_path.exists():
+                payload = {
+                    "video_id": item.video_id,
+                    "video_url": item.video_url,
+                    "captured_at": item.captured_at,
+                    "status": "missing_audio",
+                    "caption_status": meta.get("caption_status"),
+                    "caption_lang": meta.get("caption_lang"),
+                    "caption_is_auto": bool(meta.get("caption_is_auto", False)),
+                    "transcript": "",
+                    "error": "audio_not_found",
+                }
+                write_text_json(out_path, payload)
+                return {
+                    "video_id": item.video_id,
+                    "source_hash": item.source_hash,
+                    "status": "missing_audio",
+                    "error": "audio_not_found",
+                }
+
+            asr_text, asr_meta = transcribe_audio(
+                wav_path,
+                backend=args.asr_backend,
+                model_name=args.asr_model,
+            )
+            text = asr_text
+            meta["source"] = asr_meta.get("source")
+            meta["model"] = asr_meta.get("model")
+            meta["language"] = asr_meta.get("language")
+            if downloaded_audio and args.cleanup_downloaded_audio:
+                maybe_delete_local(wav_path, True)
+
+        status = "success" if text else "fail_empty_transcript"
+        payload = {
+            "video_id": item.video_id,
+            "video_url": item.video_url,
+            "captured_at": item.captured_at,
+            "status": status,
+            "transcript_source": meta.get("source"),
+            "transcript_model": meta.get("model"),
+            "transcript_language": meta.get("language"),
+            "caption_status": meta.get("caption_status"),
+            "caption_lang": meta.get("caption_lang"),
+            "caption_is_auto": bool(meta.get("caption_is_auto", False)),
+            "transcript": text,
+            "error": caption_error if status == "success" and caption_error else "",
+        }
+        write_text_json(out_path, payload)
+
+        if status == "success" and uploader.enabled:
+            try:
+                uploader.upload_file(out_path, f"{args.cloud_text_prefix.strip('/')}/{item.video_id}.json")
+                maybe_delete_local(out_path, args.cloud_delete_local_after_upload)
+            except Exception as exc:
+                raise RuntimeError(f"cloud_upload_failed: {exc}")
+
+        return {
+            "video_id": item.video_id,
+            "source_hash": item.source_hash,
+            "status": status,
+            "error": payload["error"],
+        }
+    except Exception as exc:
+        err = str(exc)
+        status = classify_error(err)
+        payload = {
+            "video_id": item.video_id,
+            "video_url": item.video_url,
+            "captured_at": item.captured_at,
+            "status": status,
+            "transcript": "",
+            "error": err,
+        }
+        write_text_json(out_path, payload)
+        return {
+            "video_id": item.video_id,
+            "source_hash": item.source_hash,
+            "status": status,
+            "error": err,
+        }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect ASR transcripts for daily-delta outputs")
     parser.add_argument("--metadata_csv", default=str(DEFAULT_METADATA_CSV))
@@ -280,6 +420,7 @@ def main() -> None:
     parser.add_argument("--out_dir", default=str(DEFAULT_TEXT_DIR))
     parser.add_argument("--audio_dir", default=str(DEFAULT_AUDIO_DIR))
     parser.add_argument("--max_items", type=int, default=0)
+    parser.add_argument("--max_workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--include_captured_at_in_hash", action="store_true")
     parser.add_argument(
         "--caption_first",
@@ -356,8 +497,8 @@ def main() -> None:
         missing_audio = 0
 
         total = len(delta)
+        pending = []
         for idx, item in enumerate(delta, start=1):
-            print(f"[text] {idx}/{total} {item.video_id}: start", flush=True)
             out_path = out_dir / f"{item.video_id}.json"
             existing = state.get(item.video_id)
             if out_path.exists() and existing and existing[3] == "success":
@@ -365,122 +506,52 @@ def main() -> None:
                 skipped_existing += 1
                 print(f"[text] {idx}/{total} {item.video_id}: skipped_existing", flush=True)
                 continue
+            pending.append((idx, item))
 
-            try:
-                text = ""
-                meta: Dict = {
-                    "source": None,
-                    "model": None,
-                    "language": None,
-                    "caption_status": None,
-                    "caption_lang": None,
-                    "caption_is_auto": False,
-                }
-                caption_error = ""
-                caption_available = as_bool(item.row.get("caption_available"))
-
-                if args.caption_first and caption_available:
-                    try:
-                        cap_text, cap_meta = try_caption_first(item.video_url, item.video_id, caption_opts)
-                        meta.update(cap_meta)
-                        if cap_text:
-                            text = cap_text
-                            meta["source"] = "youtube_caption"
-                    except Exception as cap_exc:
-                        caption_error = str(cap_exc)
-                        meta["caption_status"] = "error"
-                elif args.caption_first and not caption_available:
-                    meta["caption_status"] = "metadata_no_captions"
-
-                if not text:
-                    wav_path = audio_dir / f"{item.video_id}.wav"
-                    downloaded_audio = False
-                    if not wav_path.exists() and uploader.enabled and args.download_audio_from_cloud_if_missing:
-                        try:
-                            uploader.download_file(
-                                f"{args.cloud_audio_prefix.strip('/')}/{item.video_id}.wav",
-                                wav_path,
-                            )
-                            downloaded_audio = True
-                        except Exception:
-                            downloaded_audio = False
-
-                    if not wav_path.exists():
-                        payload = {
-                            "video_id": item.video_id,
-                            "video_url": item.video_url,
-                            "captured_at": item.captured_at,
-                            "status": "missing_audio",
-                            "caption_status": meta.get("caption_status"),
-                            "caption_lang": meta.get("caption_lang"),
-                            "caption_is_auto": bool(meta.get("caption_is_auto", False)),
-                            "transcript": "",
-                            "error": "audio_not_found",
-                        }
-                        write_text_json(out_path, payload)
-                        state.upsert(item.video_id, item.source_hash, utc_now_iso(), "missing_audio", "audio_not_found")
-                        missing_audio += 1
-                        print(f"[text] {idx}/{total} {item.video_id}: missing_audio", flush=True)
-                        continue
-
-                    asr_text, asr_meta = transcribe_audio(
-                        wav_path,
-                        backend=args.asr_backend,
-                        model_name=args.asr_model,
-                    )
-                    text = asr_text
-                    meta["source"] = asr_meta.get("source")
-                    meta["model"] = asr_meta.get("model")
-                    meta["language"] = asr_meta.get("language")
-                    if downloaded_audio and args.cleanup_downloaded_audio:
-                        maybe_delete_local(wav_path, True)
-
-                status = "success" if text else "fail_empty_transcript"
-                payload = {
-                    "video_id": item.video_id,
-                    "video_url": item.video_url,
-                    "captured_at": item.captured_at,
-                    "status": status,
-                    "transcript_source": meta.get("source"),
-                    "transcript_model": meta.get("model"),
-                    "transcript_language": meta.get("language"),
-                    "caption_status": meta.get("caption_status"),
-                    "caption_lang": meta.get("caption_lang"),
-                    "caption_is_auto": bool(meta.get("caption_is_auto", False)),
-                    "transcript": text,
-                    "error": caption_error if status == "success" and caption_error else "",
-                }
-                write_text_json(out_path, payload)
-
-                if status == "success" and uploader.enabled:
-                    try:
-                        uploader.upload_file(out_path, f"{args.cloud_text_prefix.strip('/')}/{item.video_id}.json")
-                        maybe_delete_local(out_path, args.cloud_delete_local_after_upload)
-                    except Exception as exc:
-                        raise RuntimeError(f"cloud_upload_failed: {exc}")
-
-                state.upsert(item.video_id, item.source_hash, utc_now_iso(), status, payload["error"])
-                if status == "success":
+        workers = max(1, int(args.max_workers))
+        if workers == 1:
+            for idx, item in pending:
+                print(f"[text] {idx}/{total} {item.video_id}: start", flush=True)
+                result = process_text_item(item, args, caption_opts, out_dir, audio_dir)
+                state.upsert(
+                    result["video_id"],
+                    result["source_hash"],
+                    utc_now_iso(),
+                    result["status"],
+                    result["error"],
+                )
+                if result["status"] == "success":
                     success += 1
-                    print(f"[text] {idx}/{total} {item.video_id}: success", flush=True)
+                elif result["status"] == "missing_audio":
+                    missing_audio += 1
                 else:
                     failed += 1
-                    print(f"[text] {idx}/{total} {item.video_id}: {status}", flush=True)
-            except Exception as exc:
-                err = str(exc)
-                status = classify_error(err)
-                payload = {
-                    "video_id": item.video_id,
-                    "video_url": item.video_url,
-                    "captured_at": item.captured_at,
-                    "status": status,
-                    "transcript": "",
-                    "error": err,
-                }
-                write_text_json(out_path, payload)
-                state.upsert(item.video_id, item.source_hash, utc_now_iso(), status, err)
-                failed += 1
-                print(f"[text] {idx}/{total} {item.video_id}: {status}", flush=True)
+                print(f"[text] {idx}/{total} {item.video_id}: {result['status']}", flush=True)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {}
+                for idx, item in pending:
+                    print(f"[text] {idx}/{total} {item.video_id}: start", flush=True)
+                    fut = executor.submit(process_text_item, item, args, caption_opts, out_dir, audio_dir)
+                    futures[fut] = (idx, item)
+
+                for fut in as_completed(futures):
+                    idx, item = futures[fut]
+                    result = fut.result()
+                    state.upsert(
+                        result["video_id"],
+                        result["source_hash"],
+                        utc_now_iso(),
+                        result["status"],
+                        result["error"],
+                    )
+                    if result["status"] == "success":
+                        success += 1
+                    elif result["status"] == "missing_audio":
+                        missing_audio += 1
+                    else:
+                        failed += 1
+                    print(f"[text] {idx}/{total} {item.video_id}: {result['status']}", flush=True)
 
         print("Text downloader summary")
         print(f"metadata_rows_deduped: {len(items)}")

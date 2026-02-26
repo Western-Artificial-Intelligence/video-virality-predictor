@@ -97,12 +97,21 @@ HORIZON_EXTRA_FIELDS = [
 
 def _load_api_keys():
     keys = []
-    raw = os.environ.get("YOUTUBE_API_KEYS", "")
-    if raw:
-        # Support comma, newline, or whitespace separated key lists.
-        for part in re.split(r"[\s,]+", raw.strip()):
+    # Support comma/newline/whitespace separated key lists from env.
+    raw_list = os.environ.get("YOUTUBE_API_KEYS", "")
+    if raw_list:
+        for part in re.split(r"[\s,]+", raw_list.strip()):
             if part:
                 keys.append(part)
+
+    # Also support a single-key env var.
+    raw_single = os.environ.get("YOUTUBE_API_KEY", "")
+    if raw_single:
+        for part in re.split(r"[\s,]+", raw_single.strip()):
+            if part:
+                keys.append(part)
+
+    # Backward compatibility with credentials.py import path.
     if getattr(base, "YOUTUBE_API_KEY", ""):
         keys.append(base.YOUTUBE_API_KEY)
 

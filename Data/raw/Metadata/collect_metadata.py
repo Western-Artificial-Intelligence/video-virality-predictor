@@ -17,6 +17,20 @@ try:
 except Exception:
     YOUTUBE_API_KEY = ""
 
+if not YOUTUBE_API_KEY:
+    # GitHub Actions and local shells can pass keys through env vars.
+    # Prefer explicit single-key env var, then fall back to first key in key-list env var.
+    env_key = (os.environ.get("YOUTUBE_API_KEY") or "").strip()
+    if env_key:
+        YOUTUBE_API_KEY = env_key
+    else:
+        raw_keys = (os.environ.get("YOUTUBE_API_KEYS") or "").strip()
+        if raw_keys:
+            for part in re.split(r"[\s,]+", raw_keys):
+                if part:
+                    YOUTUBE_API_KEY = part
+                    break
+
 COLLECTOR_VERSION = os.environ.get("COLLECTOR_VERSION", "v0.4.0-horizon")
 
 YT_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"

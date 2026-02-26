@@ -32,7 +32,6 @@ RAW_PREFIX="${RAW_PREFIX:-clipfarm/raw}"
 STATE_PREFIX="${STATE_PREFIX:-clipfarm/state}"
 VIDEO_PREFIX="${VIDEO_PREFIX:-video}"
 AUDIO_PREFIX="${AUDIO_PREFIX:-audio}"
-TEXT_PREFIX="${TEXT_PREFIX:-text}"
 PIPELINE_LOCK_DIR="${PIPELINE_LOCK_DIR:-/tmp/clipfarm_raw_pipeline.lock}"
 PIPELINE_LOCK_BYPASS="${PIPELINE_LOCK_BYPASS:-0}"
 
@@ -56,29 +55,15 @@ VIDEO_SLEEP_INTERVAL="${VIDEO_SLEEP_INTERVAL:-1.5}"
 VIDEO_MAX_SLEEP_INTERVAL="${VIDEO_MAX_SLEEP_INTERVAL:-4.0}"
 VIDEO_PLAYER_CLIENTS="${VIDEO_PLAYER_CLIENTS:-}"
 
-TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-faster_whisper}"
-TEXT_ASR_MODEL="${TEXT_ASR_MODEL:-}"
-if [[ -z "$TEXT_ASR_MODEL" ]]; then
-  if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]]; then
-    TEXT_ASR_MODEL="whisper-1"
-  else
-    TEXT_ASR_MODEL="small"
-  fi
-fi
-
 VIDEO_STATE_DB="${VIDEO_STATE_DB:-state/video_downloader.sqlite}"
-TEXT_STATE_DB="${TEXT_STATE_DB:-state/text_downloader.sqlite}"
 VIDEO_RAW_DIR="${VIDEO_RAW_DIR:-Data/raw/Video/raw_data}"
 AUDIO_RAW_DIR="${AUDIO_RAW_DIR:-Data/raw/Audio/raw_data}"
-TEXT_RAW_DIR="${TEXT_RAW_DIR:-Data/raw/Text/raw_data}"
 CLEAN_LOCAL_RAW_AFTER_RUN="${CLEAN_LOCAL_RAW_AFTER_RUN:-1}"
 
 VIDEO_STATE_KEY="${STATE_PREFIX}/video_downloader.sqlite"
-TEXT_STATE_KEY="${STATE_PREFIX}/text_downloader.sqlite"
 CLOUD_ROOT_URI="s3://${S3_BUCKET}/${RAW_PREFIX}"
 
 mkdir -p "$(dirname "$VIDEO_STATE_DB")"
-mkdir -p "$(dirname "$TEXT_STATE_DB")"
 
 check_python_module() {
   local module="$1"
@@ -95,24 +80,10 @@ for mod in yt_dlp requests boto3; do
     missing_modules+=("$mod")
   fi
 done
-if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]] && ! check_python_module "openai"; then
-  missing_modules+=("openai")
-fi
-if [[ "$TEXT_ASR_BACKEND" == "faster_whisper" ]] && ! check_python_module "faster_whisper"; then
-  missing_modules+=("faster_whisper")
-fi
-if [[ "$TEXT_ASR_BACKEND" == "whisper" ]] && ! check_python_module "whisper"; then
-  missing_modules+=("openai-whisper")
-fi
 if [[ ${#missing_modules[@]} -gt 0 ]]; then
   echo "ERROR: missing python modules: ${missing_modules[*]}"
   echo "Install with:"
   echo "  $_PYTHON_BIN -m pip install ${missing_modules[*]}"
-  exit 1
-fi
-
-if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]] && [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "ERROR: OPENAI_API_KEY is required when TEXT_ASR_BACKEND=openai_api"
   exit 1
 fi
 
@@ -132,13 +103,11 @@ fi
 restore_state() {
   echo "[state] restoring from s3://${S3_BUCKET}/${STATE_PREFIX}"
   aws s3 cp "s3://${S3_BUCKET}/${VIDEO_STATE_KEY}" "$VIDEO_STATE_DB" >/dev/null 2>&1 || true
-  aws s3 cp "s3://${S3_BUCKET}/${TEXT_STATE_KEY}" "$TEXT_STATE_DB" >/dev/null 2>&1 || true
 }
 
 persist_state() {
   echo "[state] persisting to s3://${S3_BUCKET}/${STATE_PREFIX}"
   [[ -f "$VIDEO_STATE_DB" ]] && aws s3 cp "$VIDEO_STATE_DB" "s3://${S3_BUCKET}/${VIDEO_STATE_KEY}" >/dev/null
-  [[ -f "$TEXT_STATE_DB" ]] && aws s3 cp "$TEXT_STATE_DB" "s3://${S3_BUCKET}/${TEXT_STATE_KEY}" >/dev/null
 }
 
 cleanup_local_raw_data() {
@@ -148,7 +117,7 @@ cleanup_local_raw_data() {
   fi
 
   local total_deleted=0
-  for dir in "$VIDEO_RAW_DIR" "$AUDIO_RAW_DIR" "$TEXT_RAW_DIR"; do
+  for dir in "$VIDEO_RAW_DIR" "$AUDIO_RAW_DIR"; do
     if [[ ! -d "$dir" ]]; then
       continue
     fi
@@ -268,32 +237,6 @@ echo "[env] cookies_file=${COOKIES_FILE:-<none>} cookies_from_browser=${COOKIES_
 video_cmd=("$_PYTHON_BIN" "${video_args[@]}")
 PYTHONUNBUFFERED=1 "${video_cmd[@]}"
 
-text_args=(
-  Data/raw/Text/text_collect.py
-  --metadata_csv "$METADATA_CSV"
-  --state_db "$TEXT_STATE_DB"
-  --cloud_root_uri "$CLOUD_ROOT_URI"
-  --cloud_audio_prefix "$AUDIO_PREFIX"
-  --cloud_text_prefix "$TEXT_PREFIX"
-  --cloud_delete_local_after_upload
-  --asr_backend "$TEXT_ASR_BACKEND"
-  --asr_model "$TEXT_ASR_MODEL"
-)
-
-if [[ "$MAX_ITEMS" != "0" ]]; then
-  text_args+=(--max_items "$MAX_ITEMS")
-fi
-
-if [[ -n "$COOKIES_FILE" ]]; then
-  text_args+=(--cookies_file "$COOKIES_FILE")
-elif [[ -n "$COOKIES_FROM_BROWSER" ]]; then
-  text_args+=(--cookies_from_browser "$COOKIES_FROM_BROWSER")
-fi
-
-echo "[text] starting collector"
-text_cmd=("$_PYTHON_BIN" "${text_args[@]}")
-PYTHONUNBUFFERED=1 "${text_cmd[@]}"
-
 cleanup_local_raw_data
 
-echo "[done] raw pipeline completed"
+echo "[done] video+audio raw pipeline completed"

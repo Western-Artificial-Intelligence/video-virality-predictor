@@ -56,7 +56,7 @@ VIDEO_SLEEP_INTERVAL="${VIDEO_SLEEP_INTERVAL:-1.5}"
 VIDEO_MAX_SLEEP_INTERVAL="${VIDEO_MAX_SLEEP_INTERVAL:-4.0}"
 VIDEO_PLAYER_CLIENTS="${VIDEO_PLAYER_CLIENTS:-}"
 
-TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-openai_api}"
+TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-faster_whisper}"
 TEXT_ASR_MODEL="${TEXT_ASR_MODEL:-}"
 if [[ -z "$TEXT_ASR_MODEL" ]]; then
   if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]]; then
@@ -97,6 +97,12 @@ for mod in yt_dlp requests boto3; do
 done
 if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]] && ! check_python_module "openai"; then
   missing_modules+=("openai")
+fi
+if [[ "$TEXT_ASR_BACKEND" == "faster_whisper" ]] && ! check_python_module "faster_whisper"; then
+  missing_modules+=("faster_whisper")
+fi
+if [[ "$TEXT_ASR_BACKEND" == "whisper" ]] && ! check_python_module "whisper"; then
+  missing_modules+=("openai-whisper")
 fi
 if [[ ${#missing_modules[@]} -gt 0 ]]; then
   echo "ERROR: missing python modules: ${missing_modules[*]}"

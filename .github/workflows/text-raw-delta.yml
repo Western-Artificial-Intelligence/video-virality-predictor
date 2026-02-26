@@ -1,15 +1,16 @@
 name: Text Raw Delta
 
 on:
-  schedule:
-    # Every 6 hours (UTC)
-    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       max_items:
         description: "Optional cap for this run (0 = no cap)"
         required: false
         default: "0"
+      max_workers:
+        description: "Parallel workers for text processing"
+        required: false
+        default: "2"
 
 permissions:
   contents: read
@@ -31,6 +32,7 @@ jobs:
     env:
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
       MAX_ITEMS: ${{ github.event.inputs.max_items || '0' }}
+      MAX_WORKERS: ${{ github.event.inputs.max_workers || '2' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,10 +71,46 @@ jobs:
       - name: Run text collector (ASR-first)
         run: |
           CLOUD_ROOT_URI="s3://$S3_BUCKET/${RAW_PREFIX}"
+          STATE_FILE="state/text_downloader.sqlite"
+          STATE_TARGET="s3://$S3_BUCKET/${STATE_PREFIX}/text_downloader.sqlite"
+
+          upload_state() {
+            if [ ! -f "$STATE_FILE" ]; then
+              echo "state_upload=skip reason=missing_file path=$STATE_FILE"
+              return 0
+            fi
+            for i in 1 2 3 4 5; do
+              if aws s3 cp "$STATE_FILE" "$STATE_TARGET"; then
+                echo "state_upload=success attempt=$i target=$STATE_TARGET"
+                return 0
+              fi
+              sleep $((i * 2))
+            done
+            echo "state_upload=failed target=$STATE_TARGET"
+            return 1
+          }
+
+          checkpoint_loop() {
+            # Periodic snapshots so manual cancellation still leaves a recent state in S3.
+            while true; do
+              sleep 120
+              upload_state || true
+            done
+          }
+
+          checkpoint_loop &
+          CHECKPOINT_PID=$!
+
+          cleanup() {
+            kill "$CHECKPOINT_PID" >/dev/null 2>&1 || true
+            upload_state || true
+          }
+
+          trap cleanup EXIT INT TERM
 
           args=(
             --metadata_csv "$METADATA_CSV"
-            --state_db state/text_downloader.sqlite
+            --state_db "$STATE_FILE"
             --cloud_root_uri "$CLOUD_ROOT_URI"
             --cloud_audio_prefix "$AUDIO_PREFIX"
             --cloud_text_prefix "$TEXT_PREFIX"
@@ -80,13 +118,18 @@ jobs:
             --asr_backend faster_whisper
             --asr_model small
             --no-caption_first
+            --max_workers "$MAX_WORKERS"
           )
 
           if [ "$MAX_ITEMS" != "0" ]; then
             args+=(--max_items "$MAX_ITEMS")
           fi
 
+          set +e
           python Data/raw/Text/text_collect.py "${args[@]}"
+          status=$?
+          set -e
+          exit "$status"
 
       - name: Persist text state
         if: always()

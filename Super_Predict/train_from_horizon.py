@@ -159,6 +159,7 @@ def main() -> None:
     parser.add_argument("--fused_pt_s3_key", default="clipfarm/fused/fused.pt")
     parser.add_argument("--model_out_prefix", default="clipfarm/models/virality/latest")
     parser.add_argument("--target_horizon_days", type=int, default=7)
+    parser.add_argument("--fusion_strategy", default="", help="Optional fusion strategy label for reporting")
     args = parser.parse_args()
 
     s3 = S3ArtifactStore(bucket=args.s3_bucket, region=args.s3_region)
@@ -212,6 +213,8 @@ def main() -> None:
         metrics_payload["target_horizon_days"] = int(args.target_horizon_days)
         metrics_payload["target_col"] = target_col
         metrics_payload["train_rows_after_join"] = int(len(features))
+        if args.fusion_strategy:
+            metrics_payload["fusion_strategy"] = args.fusion_strategy
         local_metrics.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
         train_manifest_payload = {
@@ -229,6 +232,8 @@ def main() -> None:
             "reconstructed_vectors_count": reconstructed_count,
             "downloaded_shards_count": downloaded_shards,
         }
+        if args.fusion_strategy:
+            train_manifest_payload["fusion_strategy"] = args.fusion_strategy
         local_train_manifest.write_text(json.dumps(train_manifest_payload, indent=2), encoding="utf-8")
 
         s3.upload_file(local_model, f"{args.model_out_prefix.strip('/')}/model.joblib")

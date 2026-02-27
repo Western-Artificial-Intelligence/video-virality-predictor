@@ -1,33 +1,54 @@
 name: Train From Fusion
 
 on:
-  workflow_run:
-    workflows: ["Fusion Delta"]
-    types: [completed]
   workflow_dispatch:
     inputs:
-      target_horizon_days:
-        description: "Training horizon target days"
+      run_id:
+        description: "Optional run id (defaults to gh-<run_id>)"
         required: false
-        default: "7"
+        default: ""
+      rank_metric:
+        description: "Primary rank metric (e.g. rmse_log, mae_log)"
+        required: false
+        default: "rmse_log"
+      max_epochs:
+        description: "Max epochs for neural models"
+        required: false
+        default: "40"
+      patience:
+        description: "Early-stop patience for neural models"
+        required: false
+        default: "6"
+      projector_dim:
+        description: "Projection dimension for GBDT projector"
+        required: false
+        default: "128"
 
 permissions:
   contents: read
 
 concurrency:
-  group: train-from-fusion
+  group: train-from-fusion-${{ github.event.inputs.run_id || github.run_id }}
   cancel-in-progress: false
 
 env:
   METADATA_CSV: Data/raw/Metadata/shorts_metadata_horizon.csv
-  FUSED_PREFIX: clipfarm/fused
-  MODEL_OUT_PREFIX: clipfarm/models/virality/latest
-  TARGET_HORIZON_DAYS: ${{ github.event.inputs.target_horizon_days || '7' }}
+  FUSED_PREFIX_BASE: clipfarm/fused
+  SNAPSHOT_PREFIX: clipfarm/models/snapshots
+  RUN_ID: ${{ github.event.inputs.run_id || format('gh-{0}', github.run_id) }}
+  RANK_METRIC: ${{ github.event.inputs.rank_metric || 'rmse_log' }}
+  MAX_EPOCHS: ${{ github.event.inputs.max_epochs || '40' }}
+  PATIENCE: ${{ github.event.inputs.patience || '6' }}
+  PROJECTOR_DIM: ${{ github.event.inputs.projector_dim || '128' }}
 
 jobs:
-  train:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+  train_suite:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fusion_strategy: [concat, sum_pool, max_pool]
+        target_horizon_days: [7, 30]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,23 +63,122 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install boto3 pandas numpy torch pyarrow scikit-learn joblib
+          python -m pip install boto3 pandas numpy pyarrow scikit-learn torch joblib
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-      - name: Run training
+      - name: Run training suite
         env:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          python Super_Predict/train_from_horizon.py \
+          strategy="${{ matrix.fusion_strategy }}"
+          horizon="${{ matrix.target_horizon_days }}"
+
+          python Super_Predict/train_suite_from_horizon.py \
             --metadata_csv "$METADATA_CSV" \
             --s3_bucket "$S3_BUCKET" \
             --s3_region "$AWS_REGION" \
-            --fused_manifest_s3_key "$FUSED_PREFIX/fused_manifest.parquet" \
-            --fused_pt_s3_key "$FUSED_PREFIX/fused.pt" \
-            --model_out_prefix "$MODEL_OUT_PREFIX" \
-            --target_horizon_days "$TARGET_HORIZON_DAYS"
+            --fused_manifest_s3_key "$FUSED_PREFIX_BASE/$strategy/fused_manifest.parquet" \
+            --fusion_strategy "$strategy" \
+            --target_horizon_days "$horizon" \
+            --snapshot_prefix "$SNAPSHOT_PREFIX" \
+            --run_id "$RUN_ID" \
+            --rank_metric "$RANK_METRIC" \
+            --max_epochs "$MAX_EPOCHS" \
+            --patience "$PATIENCE" \
+            --projector_dim "$PROJECTOR_DIM"
+
+  aggregate_comparison:
+    if: always()
+    needs: train_suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate secrets
+        run: |
+          if [ -z "${{ secrets.S3_BUCKET }}" ] || [ -z "${{ secrets.AWS_REGION }}" ] || [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "Missing required AWS secrets for comparison stage"
+            exit 1
+          fi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install boto3 pandas
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Aggregate run comparison
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          python Super_Predict/aggregate_train_suite_results.py \
+            --s3_bucket "$S3_BUCKET" \
+            --s3_region "$AWS_REGION" \
+            --snapshot_prefix "$SNAPSHOT_PREFIX" \
+            --run_id "$RUN_ID" \
+            --strategies "concat,sum_pool,max_pool" \
+            --horizons "7,30" \
+            --rank_metric "$RANK_METRIC" \
+            --output_dir "/tmp/train_compare"
+      - name: Write GitHub summary
+        run: |
+          python - <<'PY'
+          import os
+          import pandas as pd
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          csv_path = "/tmp/train_compare/metrics_comparison.csv"
+          run_id = os.environ.get("RUN_ID", "")
+          rank_metric = os.environ.get("RANK_METRIC", "rmse_log")
+          rank_col = rank_metric if rank_metric.startswith("val_") else f"val_{rank_metric}"
+
+          lines = [
+              f"## Training Comparison (run_id={run_id})",
+              "",
+          ]
+
+          if not os.path.exists(csv_path):
+              lines.append("No comparison CSV was produced.")
+          else:
+              df = pd.read_csv(csv_path)
+              if df.empty:
+                  lines.append("No model metrics found for this run.")
+              else:
+                  cols = [
+                      "fusion_strategy",
+                      "target_horizon_days",
+                      "model",
+                      rank_col,
+                      "val_mae_log",
+                      "val_rmse_log",
+                      "test_mae_log",
+                      "test_rmse_log",
+                  ]
+                  cols = [c for c in cols if c in df.columns]
+                  top = df.sort_values(rank_col, ascending=True).head(12)
+                  if cols:
+                      lines.append("| " + " | ".join(cols) + " |")
+                      lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+                      for row in top[cols].itertuples(index=False):
+                          vals = [str(v) for v in row]
+                          lines.append("| " + " | ".join(vals) + " |")
+                  else:
+                      lines.append("Comparison CSV exists but expected columns were not found.")
+
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write("\n".join(lines) + "\n")
+          else:
+              print("\n".join(lines))
+          PY

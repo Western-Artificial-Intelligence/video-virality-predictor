@@ -1,9 +1,6 @@
 name: Fusion Delta
 
 on:
-  workflow_run:
-    workflows: ["Embeddings Delta"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       max_items:
@@ -25,15 +22,22 @@ concurrency:
 env:
   METADATA_CSV: Data/raw/Metadata/shorts_metadata_horizon.csv
   EMB_PREFIX: clipfarm/embeddings
-  FUSED_PREFIX: clipfarm/fused
-  FUSED_SHARDS_PREFIX: clipfarm/fused/shards
+  FUSED_PREFIX_BASE: clipfarm/fused
+  TEXT_STATE_S3_KEY: clipfarm/state/text_downloader.sqlite
+  TERMINAL_TEXT_STATUSES: no_captions,fail_empty_transcript_terminal
+  TEXT_DIM: "768"
+  MAX_FAIL_RETRIES: "3"
+  SAMPLE_IDS_PER_STATUS: "10"
   MAX_ITEMS: ${{ github.event.inputs.max_items || '0' }}
   RUN_DATE: ${{ github.event.inputs.run_date || '' }}
 
 jobs:
   fuse:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fusion_strategy: [concat, sum_pool, max_pool]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,15 +64,21 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
+          strategy="${{ matrix.fusion_strategy }}"
           args=(
             --metadata_csv "$METADATA_CSV"
             --s3_bucket "$S3_BUCKET"
             --s3_region "$AWS_REGION"
             --emb_prefix "$EMB_PREFIX"
-            --fused_prefix "$FUSED_PREFIX"
-            --fused_shards_prefix "$FUSED_SHARDS_PREFIX"
-            --state_db state/fusion.sqlite
-            --state_s3_key clipfarm/state/fusion.sqlite
+            --fusion_strategy "$strategy"
+            --fused_prefix_base "$FUSED_PREFIX_BASE"
+            --state_db "state/fusion_${strategy}.sqlite"
+            --state_s3_key "clipfarm/state/fusion_${strategy}.sqlite"
+            --text_state_s3_key "$TEXT_STATE_S3_KEY"
+            --terminal_text_statuses "$TERMINAL_TEXT_STATUSES"
+            --text_dim "$TEXT_DIM"
+            --max_fail_retries "$MAX_FAIL_RETRIES"
+            --sample_ids_per_status "$SAMPLE_IDS_PER_STATUS"
             --max_items "$MAX_ITEMS"
           )
           if [ -n "$RUN_DATE" ]; then

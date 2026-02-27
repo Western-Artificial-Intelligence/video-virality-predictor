@@ -200,7 +200,7 @@ def load_latest_horizon_rows(
 def compute_delta(items: List[DeltaItem], state_db: ScriptStateDB, max_items: Optional[int] = None) -> List[DeltaItem]:
     # Only treat these statuses as terminal/processed for a given source hash.
     # Failed states must stay in delta so the next run retries them.
-    terminal_statuses = {"success", "no_captions"}
+    terminal_statuses = {"success", "no_captions", "fail_empty_transcript_terminal"}
 
     delta: List[DeltaItem] = []
     for item in items:

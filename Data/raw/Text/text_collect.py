@@ -413,6 +413,28 @@ def process_text_item(
         }
 
 
+def apply_empty_transcript_retry_policy(state: ScriptStateDB, result: Dict[str, str]) -> Dict[str, str]:
+    """Retry fail_empty_transcript once, then mark terminal on second consecutive miss."""
+    if result.get("status") != "fail_empty_transcript":
+        return result
+
+    existing = state.get(result["video_id"])
+    if not existing:
+        return result
+
+    _, existing_hash, _, existing_status, _ = existing
+    if existing_hash == result["source_hash"] and existing_status == "fail_empty_transcript":
+        patched = dict(result)
+        patched["status"] = "fail_empty_transcript_terminal"
+        if patched.get("error"):
+            patched["error"] = f"{patched['error']} | terminal_after_retry"
+        else:
+            patched["error"] = "terminal_after_retry"
+        return patched
+
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect ASR transcripts for daily-delta outputs")
     parser.add_argument("--metadata_csv", default=str(DEFAULT_METADATA_CSV))
@@ -513,6 +535,7 @@ def main() -> None:
             for idx, item in pending:
                 print(f"[text] {idx}/{total} {item.video_id}: start", flush=True)
                 result = process_text_item(item, args, caption_opts, out_dir, audio_dir)
+                result = apply_empty_transcript_retry_policy(state, result)
                 state.upsert(
                     result["video_id"],
                     result["source_hash"],
@@ -538,6 +561,7 @@ def main() -> None:
                 for fut in as_completed(futures):
                     idx, item = futures[fut]
                     result = fut.result()
+                    result = apply_empty_transcript_retry_policy(state, result)
                     state.upsert(
                         result["video_id"],
                         result["source_hash"],

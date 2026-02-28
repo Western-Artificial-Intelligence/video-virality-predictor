@@ -11,6 +11,7 @@ from pathlib import Path
 import av
 import numpy as np
 import torch
+import torch.nn.functional as F
 from transformers import VideoMAEImageProcessor, VideoMAEModel
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -28,30 +29,111 @@ DEFAULT_MODEL = "MCG-NJU/videomae-base"
 
 
 def sample_frames(video_path: Path, num_frames: int = 16) -> np.ndarray:
-    container = av.open(str(video_path))
-    frames = [frame.to_ndarray(format="rgb24") for frame in container.decode(video=0)]
-    if not frames:
+    """Sample video frames without loading the entire video into memory."""
+    with av.open(str(video_path)) as container:
+        if not container.streams.video:
+            raise ValueError("No video stream found")
+        stream = container.streams.video[0]
+        total_frames = int(stream.frames or 0)
+
+        sampled: list[np.ndarray] = []
+        if total_frames > 0:
+            target_idx = np.linspace(
+                0,
+                max(0, total_frames - 1),
+                num=min(num_frames, total_frames),
+                dtype=int,
+            )
+            target_set = set(int(i) for i in target_idx.tolist())
+            for frame_idx, frame in enumerate(container.decode(video=0)):
+                if frame_idx in target_set:
+                    sampled.append(frame.to_ndarray(format="rgb24"))
+                    if len(sampled) >= len(target_set):
+                        break
+        else:
+            # Some sources report unknown total frame count; fall back to first N frames.
+            for frame in container.decode(video=0):
+                sampled.append(frame.to_ndarray(format="rgb24"))
+                if len(sampled) >= num_frames:
+                    break
+
+    if not sampled:
         raise ValueError("No decodable video frames")
-    idx = np.linspace(0, len(frames) - 1, num_frames).astype(int)
-    sampled = [frames[i] for i in idx]
-    return np.stack(sampled)
+
+    # Ensure fixed-size tensor for the model.
+    if len(sampled) < num_frames:
+        sampled.extend([sampled[-1]] * (num_frames - len(sampled)))
+    return np.stack(sampled[:num_frames])
 
 
 class VideoEmbedder:
-    def __init__(self, model_name: str) -> None:
-        self.device = (
-            "cuda"
-            if torch.cuda.is_available()
-            else ("mps" if torch.backends.mps.is_available() else "cpu")
-        )
+    def __init__(self, model_name: str, device: str = "auto") -> None:
+        if device == "auto":
+            self.device = (
+                "cuda"
+                if torch.cuda.is_available()
+                else ("mps" if torch.backends.mps.is_available() else "cpu")
+            )
+        elif device == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA requested but not available")
+            self.device = "cuda"
+        elif device == "mps":
+            if not torch.backends.mps.is_available():
+                raise RuntimeError("MPS requested but not available")
+            self.device = "mps"
+        else:
+            self.device = "cpu"
         self.processor = VideoMAEImageProcessor.from_pretrained(model_name)
         self.model = VideoMAEModel.from_pretrained(model_name).to(self.device)
         self.model.eval()
+        self.expected_frames = int(getattr(self.model.config, "num_frames", 16))
+        self.expected_size = int(getattr(self.model.config, "image_size", 224))
+
+    def _normalize_pixel_values(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        """Normalize shape to model expectations and harden against odd frame sizes."""
+        if pixel_values.ndim == 4:
+            # (T,C,H,W) -> batch dimension
+            pixel_values = pixel_values.unsqueeze(0)
+        if pixel_values.ndim != 5:
+            raise ValueError(f"Unexpected pixel_values shape: {tuple(pixel_values.shape)}")
+
+        # Determine layout:
+        # - (B,T,C,H,W) => channel dim at index 2
+        # - (B,C,T,H,W) => channel dim at index 1
+        if pixel_values.shape[2] == 3:  # (B,T,C,H,W)
+            b, t, c, h, w = pixel_values.shape
+            if t != self.expected_frames:
+                idx = torch.linspace(0, max(t - 1, 0), self.expected_frames, dtype=torch.long)
+                pixel_values = pixel_values.index_select(dim=1, index=idx)
+                b, t, c, h, w = pixel_values.shape
+            if h != self.expected_size or w != self.expected_size:
+                flat = pixel_values.reshape(b * t, c, h, w)
+                flat = F.interpolate(flat, size=(self.expected_size, self.expected_size), mode="bilinear", align_corners=False)
+                pixel_values = flat.reshape(b, t, c, self.expected_size, self.expected_size)
+            return pixel_values
+
+        if pixel_values.shape[1] == 3:  # (B,C,T,H,W)
+            b, c, t, h, w = pixel_values.shape
+            if t != self.expected_frames:
+                idx = torch.linspace(0, max(t - 1, 0), self.expected_frames, dtype=torch.long)
+                pixel_values = pixel_values.index_select(dim=2, index=idx)
+                b, c, t, h, w = pixel_values.shape
+            if h != self.expected_size or w != self.expected_size:
+                flat = pixel_values.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
+                flat = F.interpolate(flat, size=(self.expected_size, self.expected_size), mode="bilinear", align_corners=False)
+                pixel_values = flat.reshape(b, t, c, self.expected_size, self.expected_size).permute(0, 2, 1, 3, 4)
+            return pixel_values
+
+        raise ValueError(f"Cannot infer pixel layout from shape: {tuple(pixel_values.shape)}")
 
     @torch.no_grad()
     def embed(self, video_path: Path, num_frames: int = 16) -> np.ndarray:
         frames = sample_frames(video_path, num_frames=num_frames)
         inputs = self.processor(list(frames), return_tensors="pt")
+        if "pixel_values" not in inputs:
+            raise ValueError("Video processor did not return pixel_values")
+        inputs["pixel_values"] = self._normalize_pixel_values(inputs["pixel_values"])
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         outputs = self.model(**inputs)
         cls_emb = outputs.last_hidden_state[:, 0][0]
@@ -69,6 +151,7 @@ def main() -> None:
     parser.add_argument("--state_db", default=str(DEFAULT_STATE_DB))
     parser.add_argument("--state_s3_key", default=DEFAULT_STATE_S3_KEY)
     parser.add_argument("--model_name", default=DEFAULT_MODEL)
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--num_frames", type=int, default=16)
     parser.add_argument("--max_items", type=int, default=0)
     parser.add_argument("--include_captured_at_in_hash", action="store_true")
@@ -78,7 +161,7 @@ def main() -> None:
     state_path = Path(args.state_db)
     s3.restore_state_if_exists(args.state_s3_key, state_path)
     state = StageStateDB(state_path)
-    embedder = VideoEmbedder(args.model_name)
+    embedder = VideoEmbedder(args.model_name, device=args.device)
 
     try:
         items = load_latest_horizon_rows(
@@ -93,7 +176,9 @@ def main() -> None:
 
         with tempfile.TemporaryDirectory(prefix="video_embed_") as tmp_dir:
             tmp = Path(tmp_dir)
-            for item in delta:
+            total = len(delta)
+            for idx, item in enumerate(delta, start=1):
+                print(f"[embed-video] {idx}/{total} {item.video_id}: start", flush=True)
                 raw_key = f"{args.raw_prefix.strip('/')}/video/{item.video_id}.mp4"
                 emb_key = f"{args.emb_prefix.strip('/')}/video/{item.video_id}.npy"
 
@@ -107,6 +192,7 @@ def main() -> None:
                         vector_id="",
                     )
                     missing_raw += 1
+                    print(f"[embed-video] {idx}/{total} {item.video_id}: missing_raw_object", flush=True)
                     continue
 
                 local_mp4 = tmp / f"{item.video_id}.mp4"
@@ -126,6 +212,7 @@ def main() -> None:
                         vector_id="",
                     )
                     success += 1
+                    print(f"[embed-video] {idx}/{total} {item.video_id}: success", flush=True)
                 except Exception as exc:
                     state.upsert(
                         item.video_id,
@@ -136,6 +223,7 @@ def main() -> None:
                         vector_id="",
                     )
                     failed += 1
+                    print(f"[embed-video] {idx}/{total} {item.video_id}: fail", flush=True)
                 finally:
                     if local_mp4.exists():
                         local_mp4.unlink()
@@ -148,6 +236,8 @@ def main() -> None:
         print(f"success: {success}")
         print(f"missing_raw_object: {missing_raw}")
         print(f"failed: {failed}")
+        print(f"device: {embedder.device}")
+        print(f"num_frames: {args.num_frames}")
         print(f"state_db: {args.state_db}")
         print(f"state_s3_key: {args.state_s3_key}")
     finally:

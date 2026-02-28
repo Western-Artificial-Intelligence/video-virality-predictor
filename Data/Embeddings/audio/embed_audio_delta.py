@@ -26,6 +26,7 @@ DEFAULT_RAW_PREFIX = "clipfarm/raw"
 DEFAULT_EMB_PREFIX = "clipfarm/embeddings"
 DEFAULT_MODEL = "facebook/wav2vec2-base-960h"
 DEFAULT_SAMPLE_RATE = 16000
+DEFAULT_MAX_AUDIO_SECONDS = 90.0
 
 
 class AudioEmbedder:
@@ -40,8 +41,19 @@ class AudioEmbedder:
         self.model.eval()
 
     @torch.no_grad()
-    def embed(self, wav_path: Path, sample_rate: int = DEFAULT_SAMPLE_RATE) -> np.ndarray:
-        audio, _ = librosa.load(str(wav_path), sr=sample_rate)
+    def embed(
+        self,
+        wav_path: Path,
+        sample_rate: int = DEFAULT_SAMPLE_RATE,
+        max_audio_seconds: float = DEFAULT_MAX_AUDIO_SECONDS,
+    ) -> np.ndarray:
+        # Guard against pathological/corrupt files causing huge allocations.
+        duration = None
+        if max_audio_seconds and max_audio_seconds > 0:
+            duration = float(max_audio_seconds)
+        audio, _ = librosa.load(str(wav_path), sr=sample_rate, duration=duration)
+        if audio.size == 0:
+            raise ValueError("Empty audio after load")
         inputs = self.processor(audio, sampling_rate=sample_rate, return_tensors="pt", padding=True)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         outputs = self.model(**inputs)
@@ -63,6 +75,7 @@ def main() -> None:
     parser.add_argument("--state_s3_key", default=DEFAULT_STATE_S3_KEY)
     parser.add_argument("--model_name", default=DEFAULT_MODEL)
     parser.add_argument("--sample_rate", type=int, default=DEFAULT_SAMPLE_RATE)
+    parser.add_argument("--max_audio_seconds", type=float, default=DEFAULT_MAX_AUDIO_SECONDS)
     parser.add_argument("--max_items", type=int, default=0)
     parser.add_argument("--include_captured_at_in_hash", action="store_true")
     args = parser.parse_args()
@@ -106,7 +119,11 @@ def main() -> None:
                 local_npy = tmp / f"{item.video_id}.npy"
                 try:
                     s3.download_file(raw_key, local_wav)
-                    emb = embedder.embed(local_wav, sample_rate=args.sample_rate)
+                    emb = embedder.embed(
+                        local_wav,
+                        sample_rate=args.sample_rate,
+                        max_audio_seconds=args.max_audio_seconds,
+                    )
                     np.save(local_npy, emb)
                     s3.upload_file(local_npy, emb_key)
 
@@ -141,6 +158,8 @@ def main() -> None:
         print(f"success: {success}")
         print(f"missing_raw_object: {missing_raw}")
         print(f"failed: {failed}")
+        print(f"sample_rate: {args.sample_rate}")
+        print(f"max_audio_seconds: {args.max_audio_seconds}")
         print(f"state_db: {args.state_db}")
         print(f"state_s3_key: {args.state_s3_key}")
     finally:

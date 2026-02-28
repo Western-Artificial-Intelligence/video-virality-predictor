@@ -8,6 +8,8 @@ Flow per video:
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,6 +36,13 @@ DEFAULT_STATE_DB = REPO_ROOT / "state" / "text_downloader.sqlite"
 PREFERRED_LANGS = ["en", "en-US", "en-GB"]
 DEFAULT_MAX_WORKERS = max(1, min(os.cpu_count() or 1, 4))
 _THREAD_LOCAL = __import__("threading").local()
+DEFAULT_WHISPER_CPP_BIN_CANDIDATES = ("whisper-cli", "whisper-cpp", "main")
+DEFAULT_WHISPER_CPP_MODEL_DIRS = (
+    "~/.cache/whisper.cpp",
+    "~/.local/share/whisper.cpp",
+    "/opt/homebrew/share/whisper.cpp/models",
+    "/usr/local/share/whisper.cpp/models",
+)
 
 
 def utc_now_iso() -> str:
@@ -55,6 +64,8 @@ def classify_error(error_text: str) -> str:
     if "rate limit" in msg or "429" in msg:
         return "fail_rate_limited"
     if "module not found" in msg or "no module named" in msg:
+        return "fail_asr_backend_missing"
+    if "whisper.cpp binary not found" in msg or "model file not found" in msg:
         return "fail_asr_backend_missing"
     if "cloud_upload_failed" in msg:
         return "fail_cloud_upload"
@@ -177,25 +188,192 @@ def transcribe_faster_whisper(audio_path: Path, model_name: str) -> Tuple[str, D
     }
 
 
-def transcribe_openai_whisper(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
-    import whisper  # type: ignore
+def _resolve_whisper_cpp_bin(explicit_bin: str = "") -> str:
+    if explicit_bin:
+        explicit = str(Path(explicit_bin).expanduser())
+        if Path(explicit).exists():
+            return explicit
+        resolved = shutil.which(explicit_bin)
+        if resolved:
+            return resolved
 
-    whisper_models = getattr(_THREAD_LOCAL, "whisper_models", None)
-    if whisper_models is None:
-        whisper_models = {}
-        _THREAD_LOCAL.whisper_models = whisper_models
+    env_bin = os.getenv("WHISPER_CPP_BIN", "").strip()
+    if env_bin:
+        env_resolved = shutil.which(env_bin) or str(Path(env_bin).expanduser())
+        if Path(env_resolved).exists():
+            return env_resolved
 
-    model = whisper_models.get(model_name)
-    if model is None:
-        model = whisper.load_model(model_name)
-        whisper_models[model_name] = model
-    result = model.transcribe(str(audio_path))
-    text = (result.get("text") or "").strip()
-    return text, {
-        "source": "openai_whisper_local",
-        "model": model_name,
-        "language": result.get("language"),
-    }
+    for cand in DEFAULT_WHISPER_CPP_BIN_CANDIDATES:
+        resolved = shutil.which(cand)
+        if resolved:
+            return resolved
+    raise RuntimeError(
+        "whisper.cpp binary not found. Set --whisper_cpp_bin or WHISPER_CPP_BIN "
+        "(expected one of: whisper-cli, whisper-cpp, main)."
+    )
+
+
+def _resolve_whisper_cpp_model(model_name: str, explicit_model_dir: str = "") -> Path:
+    model_name = (model_name or "small").strip()
+    direct = Path(model_name).expanduser()
+    if direct.exists() and direct.is_file():
+        return direct
+
+    search_dirs = []
+    if explicit_model_dir:
+        search_dirs.append(Path(explicit_model_dir).expanduser())
+    env_dir = os.getenv("WHISPER_CPP_MODEL_DIR", "").strip()
+    if env_dir:
+        search_dirs.append(Path(env_dir).expanduser())
+    for d in DEFAULT_WHISPER_CPP_MODEL_DIRS:
+        search_dirs.append(Path(d).expanduser())
+
+    candidates = []
+    normalized = model_name
+    if normalized.endswith(".bin"):
+        candidates.append(normalized)
+    else:
+        candidates.append(f"ggml-{normalized}.bin")
+        candidates.append(f"{normalized}.bin")
+        candidates.append(normalized)
+
+    for model_dir in search_dirs:
+        for name in candidates:
+            p = model_dir / name
+            if p.exists() and p.is_file():
+                return p
+
+    tried_dirs = ", ".join(str(p) for p in search_dirs)
+    tried_names = ", ".join(candidates)
+    raise RuntimeError(
+        f"whisper.cpp model file not found for '{model_name}'. "
+        f"Tried names [{tried_names}] in [{tried_dirs}]. "
+        "Set --whisper_cpp_model_dir or WHISPER_CPP_MODEL_DIR."
+    )
+
+
+def _parse_whisper_cpp_json(json_path: Path) -> Tuple[str, Optional[str], list]:
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    language = None
+    result = payload.get("result")
+    if isinstance(result, dict):
+        language = result.get("language")
+    if not language:
+        language = payload.get("language")
+
+    segments = []
+    raw_segments = payload.get("transcription")
+    if not isinstance(raw_segments, list):
+        raw_segments = payload.get("segments") or []
+
+    texts = []
+    for seg in raw_segments:
+        if not isinstance(seg, dict):
+            continue
+        text = (seg.get("text") or "").strip()
+        if text:
+            texts.append(text)
+        offsets = seg.get("offsets") if isinstance(seg.get("offsets"), dict) else {}
+        ts = seg.get("timestamps") if isinstance(seg.get("timestamps"), dict) else {}
+        segments.append(
+            {
+                "text": text,
+                "start_ms": offsets.get("from"),
+                "end_ms": offsets.get("to"),
+                "start_ts": ts.get("from"),
+                "end_ts": ts.get("to"),
+            }
+        )
+
+    text = " ".join(t for t in texts if t).strip()
+    return text, language, segments
+
+
+def transcribe_whisper_cpp(
+    audio_path: Path,
+    model_name: str,
+    whisper_cpp_bin: str = "",
+    whisper_cpp_model_dir: str = "",
+    whisper_cpp_threads: int = 0,
+    emit_subtitles: bool = True,
+) -> Tuple[str, Dict]:
+    bin_path = _resolve_whisper_cpp_bin(whisper_cpp_bin)
+    model_path = _resolve_whisper_cpp_model(model_name=model_name, explicit_model_dir=whisper_cpp_model_dir)
+
+    threads = int(whisper_cpp_threads or 0)
+    if threads <= 0:
+        threads = max(1, min(os.cpu_count() or 1, 8))
+
+    with tempfile.TemporaryDirectory(prefix="whispercpp_") as tmp_dir:
+        out_prefix = Path(tmp_dir) / audio_path.stem
+        json_path = out_prefix.with_suffix(".json")
+        srt_path = out_prefix.with_suffix(".srt")
+        vtt_path = out_prefix.with_suffix(".vtt")
+
+        # Prefer modern long flags first, then short flags for older builds.
+        cmd_variants = [
+            [
+                bin_path,
+                "--model",
+                str(model_path),
+                "--file",
+                str(audio_path),
+                "--language",
+                "auto",
+                "--threads",
+                str(threads),
+                "--output-json",
+                "--output-file",
+                str(out_prefix),
+            ],
+            [
+                bin_path,
+                "-m",
+                str(model_path),
+                "-f",
+                str(audio_path),
+                "-l",
+                "auto",
+                "-t",
+                str(threads),
+                "-oj",
+                "-of",
+                str(out_prefix),
+            ],
+        ]
+        if emit_subtitles:
+            cmd_variants[0].extend(["--output-srt", "--output-vtt"])
+            cmd_variants[1].extend(["-osrt", "-ovtt"])
+
+        last_error = ""
+        success = False
+        for cmd in cmd_variants:
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode == 0 and json_path.exists():
+                success = True
+                break
+            stderr = (proc.stderr or "").strip()
+            stdout = (proc.stdout or "").strip()
+            last_error = stderr or stdout or f"exit_code={proc.returncode}"
+
+        if not success:
+            raise RuntimeError(f"whisper_cpp_failed: {last_error}")
+
+        text, language, segments = _parse_whisper_cpp_json(json_path)
+        subtitle_payload = {}
+        if emit_subtitles:
+            if srt_path.exists():
+                subtitle_payload["subtitle_srt"] = srt_path.read_text(encoding="utf-8", errors="ignore")
+            if vtt_path.exists():
+                subtitle_payload["subtitle_vtt"] = vtt_path.read_text(encoding="utf-8", errors="ignore")
+
+        return text, {
+            "source": "whisper_cpp",
+            "model": model_path.name,
+            "language": language,
+            "timestamps": segments,
+            **subtitle_payload,
+        }
 
 
 def transcribe_openai_api(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
@@ -247,19 +425,33 @@ def transcribe_audio(audio_path: Path, backend: str, model_name: str) -> Tuple[s
 
     if backend == "faster_whisper":
         return transcribe_faster_whisper(audio_path, model_name)
-    if backend == "whisper":
-        return transcribe_openai_whisper(audio_path, model_name)
+    if backend in {"whisper", "whisper_cpp"}:
+        return transcribe_whisper_cpp(
+            audio_path,
+            model_name,
+            whisper_cpp_bin=os.getenv("WHISPER_CPP_BIN", ""),
+            whisper_cpp_model_dir=os.getenv("WHISPER_CPP_MODEL_DIR", ""),
+            whisper_cpp_threads=int(os.getenv("WHISPER_CPP_THREADS", "0") or 0),
+            emit_subtitles=(os.getenv("WHISPER_CPP_EMIT_SUBTITLES", "1").strip() != "0"),
+        )
     if backend == "openai_api":
         return transcribe_openai_api(audio_path, model_name)
 
-    # auto mode: faster-whisper -> whisper -> openai_api
+    # auto mode: faster-whisper -> whisper.cpp -> openai_api
     errors = []
-    for candidate in ("faster_whisper", "whisper", "openai_api"):
+    for candidate in ("faster_whisper", "whisper_cpp", "openai_api"):
         try:
             if candidate == "faster_whisper":
                 return transcribe_faster_whisper(audio_path, model_name)
-            if candidate == "whisper":
-                return transcribe_openai_whisper(audio_path, model_name)
+            if candidate == "whisper_cpp":
+                return transcribe_whisper_cpp(
+                    audio_path,
+                    model_name,
+                    whisper_cpp_bin=os.getenv("WHISPER_CPP_BIN", ""),
+                    whisper_cpp_model_dir=os.getenv("WHISPER_CPP_MODEL_DIR", ""),
+                    whisper_cpp_threads=int(os.getenv("WHISPER_CPP_THREADS", "0") or 0),
+                    emit_subtitles=(os.getenv("WHISPER_CPP_EMIT_SUBTITLES", "1").strip() != "0"),
+                )
             return transcribe_openai_api(audio_path, "whisper-1")
         except Exception as exc:
             errors.append(f"{candidate}: {exc}")
@@ -360,6 +552,9 @@ def process_text_item(
             meta["source"] = asr_meta.get("source")
             meta["model"] = asr_meta.get("model")
             meta["language"] = asr_meta.get("language")
+            meta["timestamps"] = asr_meta.get("timestamps", [])
+            meta["subtitle_srt"] = asr_meta.get("subtitle_srt", "")
+            meta["subtitle_vtt"] = asr_meta.get("subtitle_vtt", "")
             if downloaded_audio and args.cleanup_downloaded_audio:
                 maybe_delete_local(wav_path, True)
 
@@ -375,6 +570,9 @@ def process_text_item(
             "caption_status": meta.get("caption_status"),
             "caption_lang": meta.get("caption_lang"),
             "caption_is_auto": bool(meta.get("caption_is_auto", False)),
+            "timestamps": meta.get("timestamps", []),
+            "subtitle_srt": meta.get("subtitle_srt", ""),
+            "subtitle_vtt": meta.get("subtitle_vtt", ""),
             "transcript": text,
             "error": caption_error if status == "success" and caption_error else "",
         }
@@ -464,13 +662,35 @@ def main() -> None:
     parser.add_argument(
         "--asr_backend",
         default="auto",
-        choices=["auto", "faster_whisper", "whisper", "openai_api"],
+        choices=["auto", "faster_whisper", "whisper", "whisper_cpp", "openai_api"],
         help="ASR backend selection",
     )
     parser.add_argument(
         "--asr_model",
         default="small",
         help="Model name for local backends (e.g., tiny/base/small/medium/large-v3). openai_api always uses whisper-1.",
+    )
+    parser.add_argument(
+        "--whisper_cpp_bin",
+        default=os.getenv("WHISPER_CPP_BIN", ""),
+        help="Optional whisper.cpp binary path/name (default: env WHISPER_CPP_BIN or auto-detect).",
+    )
+    parser.add_argument(
+        "--whisper_cpp_model_dir",
+        default=os.getenv("WHISPER_CPP_MODEL_DIR", ""),
+        help="Optional whisper.cpp model directory (default: env WHISPER_CPP_MODEL_DIR or standard cache paths).",
+    )
+    parser.add_argument(
+        "--whisper_cpp_threads",
+        type=int,
+        default=int(os.getenv("WHISPER_CPP_THREADS", "0") or 0),
+        help="whisper.cpp CPU threads (0 = auto).",
+    )
+    parser.add_argument(
+        "--whisper_cpp_emit_subtitles",
+        action=argparse.BooleanOptionalAction,
+        default=(os.getenv("WHISPER_CPP_EMIT_SUBTITLES", "1").strip() != "0"),
+        help="Emit subtitle payload (SRT/VTT) from whisper.cpp when available.",
     )
     parser.add_argument(
         "--cloud_root_uri",
@@ -498,6 +718,12 @@ def main() -> None:
     )
     args = parser.parse_args()
     caption_opts = build_caption_ydl_opts(args, args.player_clients)
+
+    # Keep transcribe_audio signature stable; transport whisper.cpp knobs via env.
+    os.environ["WHISPER_CPP_BIN"] = (args.whisper_cpp_bin or "").strip()
+    os.environ["WHISPER_CPP_MODEL_DIR"] = (args.whisper_cpp_model_dir or "").strip()
+    os.environ["WHISPER_CPP_THREADS"] = str(int(args.whisper_cpp_threads))
+    os.environ["WHISPER_CPP_EMIT_SUBTITLES"] = "1" if args.whisper_cpp_emit_subtitles else "0"
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

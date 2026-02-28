@@ -39,7 +39,7 @@ SYNC_METADATA_FROM_ORIGIN="${SYNC_METADATA_FROM_ORIGIN:-1}"
 ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
 ORIGIN_BRANCH="${ORIGIN_BRANCH:-main}"
 
-TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-faster_whisper}"
+TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-whisper_cpp}"
 TEXT_ASR_MODEL="${TEXT_ASR_MODEL:-}"
 if [[ -z "$TEXT_ASR_MODEL" ]]; then
   if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]]; then
@@ -83,13 +83,36 @@ fi
 if [[ "$TEXT_ASR_BACKEND" == "faster_whisper" ]] && ! check_python_module "faster_whisper"; then
   missing_modules+=("faster_whisper")
 fi
-if [[ "$TEXT_ASR_BACKEND" == "whisper" ]] && ! check_python_module "whisper"; then
-  missing_modules+=("openai-whisper")
+if [[ "$TEXT_ASR_BACKEND" == "whisper" || "$TEXT_ASR_BACKEND" == "whisper_cpp" ]]; then
+  WHISPER_CPP_BIN="${WHISPER_CPP_BIN:-}"
+  if [[ -n "$WHISPER_CPP_BIN" ]]; then
+    if ! command -v "$WHISPER_CPP_BIN" >/dev/null 2>&1 && [[ ! -x "$WHISPER_CPP_BIN" ]]; then
+      missing_modules+=("whisper.cpp-binary")
+    fi
+  else
+    if ! command -v whisper-cli >/dev/null 2>&1 && ! command -v whisper-cpp >/dev/null 2>&1 && ! command -v main >/dev/null 2>&1; then
+      missing_modules+=("whisper.cpp-binary")
+    fi
+  fi
 fi
 if [[ ${#missing_modules[@]} -gt 0 ]]; then
-  echo "ERROR: missing python modules: ${missing_modules[*]}"
-  echo "Install with:"
-  echo "  $_PYTHON_BIN -m pip install ${missing_modules[*]}"
+  echo "ERROR: missing dependencies: ${missing_modules[*]}"
+  if ! printf '%s\n' "${missing_modules[@]}" | grep -q "whisper.cpp-binary"; then
+    echo "Install with:"
+    echo "  $_PYTHON_BIN -m pip install ${missing_modules[*]}"
+  else
+    pip_mods=()
+    for mod in "${missing_modules[@]}"; do
+      if [[ "$mod" != "whisper.cpp-binary" ]]; then
+        pip_mods+=("$mod")
+      fi
+    done
+    if [[ ${#pip_mods[@]} -gt 0 ]]; then
+      echo "Install python deps with:"
+      echo "  $_PYTHON_BIN -m pip install ${pip_mods[*]}"
+    fi
+    echo "  Also install whisper.cpp binary (whisper-cli) and set WHISPER_CPP_BIN / WHISPER_CPP_MODEL_DIR."
+  fi
   exit 1
 fi
 

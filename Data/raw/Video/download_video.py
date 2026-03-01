@@ -34,6 +34,12 @@ def classify_video_error(error_text: str) -> str:
     msg = (error_text or "").lower()
     if "premieres in" in msg or "this live event will begin" in msg or "upcoming" in msg:
         return "fail_upcoming"
+    if "sign in to confirm your age" in msg or "this video may be inappropriate for some users" in msg:
+        return "fail_age_restricted"
+    if "private video." in msg or "private video" in msg:
+        return "fail_private"
+    if "has been removed for violating youtube's policy" in msg or "removed for violating youtube policy" in msg:
+        return "fail_removed"
     if "video unavailable. this video has been removed by the uploader" in msg:
         return "fail_removed"
     if "video unavailable. this video is private" in msg:
@@ -70,7 +76,14 @@ def is_terminal_video_failure(existing: tuple, item_hash: str) -> bool:
     status = existing[3]
     if existing_hash != item_hash:
         return False
-    return status in {"missing", "fail_removed", "fail_private", "fail_unavailable"}
+    return status in {
+        "missing",
+        "fail_removed",
+        "fail_private",
+        "fail_unavailable",
+        "fail_upcoming",
+        "fail_age_restricted",
+    }
 
 
 def build_ydl_opts(
@@ -80,7 +93,7 @@ def build_ydl_opts(
     player_clients: Optional[str],
     sleep_interval: float,
     max_sleep_interval: float,
-    format_selector: str = "bv*+ba/best",
+    format_selector: str = "b/bv*+ba/best",
 ) -> dict:
     out_tmpl = str(out_mp4.with_suffix(".%(ext)s"))
     clients = [] if player_clients is None else [c.strip() for c in (player_clients or "").split(",") if c.strip()]
@@ -102,8 +115,6 @@ def build_ydl_opts(
         "merge_output_format": "mp4",
         "noplaylist": True,
         "quiet": True,
-        # Avoid SABR-prone web clients where possible.
-        "extractor_args": {"youtube": {"player_client": clients}},
         # Be conservative on fragment parallelism to reduce mid-stream 403s.
         "concurrent_fragment_downloads": 1,
         # Prevent long hangs on problematic IDs.
@@ -112,7 +123,7 @@ def build_ydl_opts(
         "fragment_retries": 1,
     }
     if player_clients is not None:
-        # Avoid SABR-prone web clients where possible.
+        # Allow explicit client control for primary/fallback attempts.
         ydl_opts["extractor_args"] = {"youtube": {"player_client": clients}}
     if cookies_file:
         ydl_opts["cookiefile"] = cookies_file
@@ -134,7 +145,7 @@ def download_video(
     player_clients: Optional[str],
     sleep_interval: float,
     max_sleep_interval: float,
-    format_selector: str = "bv*+ba/best",
+    format_selector: str = "b/bv*+ba/best",
 ) -> None:
     ydl_opts = build_ydl_opts(
         out_mp4,
@@ -208,12 +219,12 @@ def download_video_with_fallback(
         )
 
     # 1) Caller strategy.
-    add_attempt(cookies_file, cookies_from_browser, player_clients, "bv*+ba/best")
+    add_attempt(cookies_file, cookies_from_browser, player_clients, "b/bv*+ba/best")
     # 2) No-cookies mobile/tv strategy, robust against web challenge gating.
-    add_attempt("", "", "android,ios,tv", "bv*+ba/best")
+    add_attempt("", "", "android,ios,tv", "b/bv*+ba/best")
     # 3) Cookie web strategy (if provided), helps with auth-gated videos.
     if cookies_file or cookies_from_browser:
-        add_attempt(cookies_file, cookies_from_browser, "web,web_safari", "bv*+ba/best")
+        add_attempt(cookies_file, cookies_from_browser, "web,web_safari", "b/bv*+ba/best")
     # 4) Final generic fallback with default client resolver and broader format.
     add_attempt("", "", None, "best")
 
@@ -360,12 +371,12 @@ def main() -> None:
                         status = classify_video_error(error_text)
                         # Deterministic/gated failures should not be retried immediately.
                         if status in {
-                            "fail_challenge_gated",
-                            "fail_format_unavailable",
                             "fail_auth",
+                            "fail_age_restricted",
                             "fail_removed",
                             "fail_private",
                             "fail_unavailable",
+                            "fail_upcoming",
                         }:
                             break
                         if attempt <= args.retry:

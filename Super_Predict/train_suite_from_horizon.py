@@ -36,6 +36,7 @@ from Data.common.s3_artifact_store import S3ArtifactStore  # noqa: E402
 
 STRATEGIES = ("concat", "sum_pool", "max_pool")
 HORIZONS = (7, 30)
+MODEL_FAMILIES = ("all", "concat_mlp", "gated_fusion_mlp", "ridge", "gbdt")
 LOW_CARD_CATEGORICAL_CANDIDATES = ["channel_country", "default_language", "default_audio_language", "query"]
 HIGH_CARD_EXCLUDE = {"channel_id", "channel_title"}
 LEAKAGE_COLUMNS = {
@@ -247,6 +248,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fused_manifest_s3_key", required=True)
     parser.add_argument("--fusion_strategy", choices=STRATEGIES, required=True)
     parser.add_argument("--target_horizon_days", type=int, choices=HORIZONS, required=True)
+    parser.add_argument("--model_family", choices=MODEL_FAMILIES, default="all")
     parser.add_argument("--snapshot_prefix", default="clipfarm/models/snapshots")
     parser.add_argument("--run_id", default="")
     parser.add_argument("--seed", type=int, default=42)
@@ -266,6 +268,12 @@ def check_split_ratios(args: argparse.Namespace) -> None:
     total = args.split_train + args.split_val + args.split_test
     if abs(total - 1.0) > 1e-6:
         raise ValueError(f"split ratios must sum to 1.0, got {total}")
+
+
+def selected_models(model_family: str) -> List[str]:
+    if model_family == "all":
+        return ["concat_mlp", "gated_fusion_mlp", "ridge", "gbdt"]
+    return [model_family]
 
 
 def pick_device(name: str) -> torch.device:
@@ -941,6 +949,8 @@ def main() -> None:
         nn_bundle = fit_nn_metadata_bundle(joined, split.train, numeric_cols=numeric_cols, categorical_cols=categorical_cols)
         nn_num, nn_cat, cat_cardinalities = transform_nn_metadata(joined, nn_bundle)
 
+        requested_models = selected_models(args.model_family)
+
         payload_concat = {
             "fused": fused_use.astype(np.float32),
             "num": nn_num.astype(np.float32),
@@ -958,145 +968,170 @@ def main() -> None:
         def sub_payload(payload: Dict[str, np.ndarray], idx: np.ndarray) -> Dict[str, np.ndarray]:
             return {k: v[idx] for k, v in payload.items()}
 
-        train_loader_concat = build_loader(sub_payload(payload_concat, split.train), ["fused", "num", "cat"], y_log[split.train], 256, True)
-        val_loader_concat = build_loader(sub_payload(payload_concat, split.val), ["fused", "num", "cat"], y_log[split.val], 512, False)
-        test_loader_concat = build_loader(sub_payload(payload_concat, split.test), ["fused", "num", "cat"], y_log[split.test], 512, False)
+        pred_val_map: Dict[str, np.ndarray] = {}
+        pred_test_map: Dict[str, np.ndarray] = {}
+        model_curves: Dict[str, Dict[str, List[float]]] = {}
+        concat_model: ConcatMLP | None = None
+        gated_model: GatedFusionMLP | None = None
+        projector_model: ProjectorRegressor | None = None
+        ridge_pipe: Pipeline | None = None
+        gbdt_pipe: Pipeline | None = None
 
-        concat_model = ConcatMLP(
-            fused_dim=fused_use.shape[1],
-            numeric_dim=nn_num.shape[1],
-            cat_cardinalities=cat_cardinalities,
-            hidden_dims=[1024, 512, 256],
-            dropout=0.20,
-        )
-
-        def concat_forward(model: ConcatMLP, features: List[torch.Tensor]) -> torch.Tensor:
-            return model(features[0], features[1], features[2].long())
-
-        _best_concat_state, concat_curves = fit_torch_model(
-            model=concat_model,
-            train_loader=train_loader_concat,
-            val_loader=val_loader_concat,
-            device=device,
-            max_epochs=args.max_epochs,
-            patience=args.patience,
-            learning_rate=1e-3,
-            weight_decay=1e-4,
-            batch_forward=concat_forward,
-        )
-
-        pred_concat_val = predict_torch_model(concat_model, val_loader_concat, device, concat_forward)
-        pred_concat_test = predict_torch_model(concat_model, test_loader_concat, device, concat_forward)
-
-        train_loader_gated = build_loader(
-            sub_payload(payload_gated, split.train),
-            ["video", "audio", "text", "num", "cat", "text_present"],
-            y_log[split.train],
-            256,
-            True,
-        )
-        val_loader_gated = build_loader(
-            sub_payload(payload_gated, split.val),
-            ["video", "audio", "text", "num", "cat", "text_present"],
-            y_log[split.val],
-            512,
-            False,
-        )
-        test_loader_gated = build_loader(
-            sub_payload(payload_gated, split.test),
-            ["video", "audio", "text", "num", "cat", "text_present"],
-            y_log[split.test],
-            512,
-            False,
-        )
-
-        gated_model = GatedFusionMLP(
-            video_dim=video_use.shape[1],
-            audio_dim=audio_use.shape[1],
-            text_dim=text_use.shape[1],
-            numeric_dim=nn_num.shape[1],
-            cat_cardinalities=cat_cardinalities,
-            tower_dim=256,
-            gate_hidden=128,
-            head_hidden=[256, 128],
-            dropout=0.15,
-        )
-
-        def gated_forward(model: GatedFusionMLP, features: List[torch.Tensor]) -> torch.Tensor:
-            return model(
-                features[0],
-                features[1],
-                features[2],
-                features[3],
-                features[4].long(),
-                features[5],
+        if "concat_mlp" in requested_models:
+            train_loader_concat = build_loader(
+                sub_payload(payload_concat, split.train),
+                ["fused", "num", "cat"],
+                y_log[split.train],
+                256,
+                True,
+            )
+            val_loader_concat = build_loader(
+                sub_payload(payload_concat, split.val),
+                ["fused", "num", "cat"],
+                y_log[split.val],
+                512,
+                False,
+            )
+            test_loader_concat = build_loader(
+                sub_payload(payload_concat, split.test),
+                ["fused", "num", "cat"],
+                y_log[split.test],
+                512,
+                False,
             )
 
-        _best_gated_state, gated_curves = fit_torch_model(
-            model=gated_model,
-            train_loader=train_loader_gated,
-            val_loader=val_loader_gated,
-            device=device,
-            max_epochs=args.max_epochs,
-            patience=args.patience,
-            learning_rate=7e-4,
-            weight_decay=1e-4,
-            batch_forward=gated_forward,
-        )
+            concat_model = ConcatMLP(
+                fused_dim=fused_use.shape[1],
+                numeric_dim=nn_num.shape[1],
+                cat_cardinalities=cat_cardinalities,
+                hidden_dims=[1024, 512, 256],
+                dropout=0.20,
+            )
 
-        pred_gated_val = predict_torch_model(gated_model, val_loader_gated, device, gated_forward)
-        pred_gated_test = predict_torch_model(gated_model, test_loader_gated, device, gated_forward)
+            def concat_forward(model: ConcatMLP, features: List[torch.Tensor]) -> torch.Tensor:
+                return model(features[0], features[1], features[2].long())
 
-        ridge_pipe, ridge_preds = fit_ridge_model(
-            metadata=joined[numeric_cols + categorical_cols].copy(),
-            fused=fused_use,
-            y=y_log,
-            split=split,
-            categorical_cols=categorical_cols,
-            numeric_cols=numeric_cols,
-        )
+            _best_concat_state, concat_curves = fit_torch_model(
+                model=concat_model,
+                train_loader=train_loader_concat,
+                val_loader=val_loader_concat,
+                device=device,
+                max_epochs=args.max_epochs,
+                patience=args.patience,
+                learning_rate=1e-3,
+                weight_decay=1e-4,
+                batch_forward=concat_forward,
+            )
+            model_curves["concat_mlp"] = concat_curves
+            pred_val_map["concat_mlp"] = predict_torch_model(concat_model, val_loader_concat, device, concat_forward)
+            pred_test_map["concat_mlp"] = predict_torch_model(concat_model, test_loader_concat, device, concat_forward)
 
-        projector_model, projector_curves, projected = fit_projector(
-            fused=fused_use,
-            y=y_log,
-            split=split,
-            device=device,
-            max_epochs=max(10, min(args.max_epochs, 20)),
-            patience=max(4, min(args.patience, 8)),
-            projector_dim=args.projector_dim,
-        )
+        if "gated_fusion_mlp" in requested_models:
+            train_loader_gated = build_loader(
+                sub_payload(payload_gated, split.train),
+                ["video", "audio", "text", "num", "cat", "text_present"],
+                y_log[split.train],
+                256,
+                True,
+            )
+            val_loader_gated = build_loader(
+                sub_payload(payload_gated, split.val),
+                ["video", "audio", "text", "num", "cat", "text_present"],
+                y_log[split.val],
+                512,
+                False,
+            )
+            test_loader_gated = build_loader(
+                sub_payload(payload_gated, split.test),
+                ["video", "audio", "text", "num", "cat", "text_present"],
+                y_log[split.test],
+                512,
+                False,
+            )
 
-        gbdt_pipe, gbdt_preds = fit_gbdt_model(
-            metadata=joined[numeric_cols + categorical_cols].copy(),
-            projected_fused=projected,
-            y=y_log,
-            split=split,
-            categorical_cols=categorical_cols,
-            numeric_cols=numeric_cols,
-        )
+            gated_model = GatedFusionMLP(
+                video_dim=video_use.shape[1],
+                audio_dim=audio_use.shape[1],
+                text_dim=text_use.shape[1],
+                numeric_dim=nn_num.shape[1],
+                cat_cardinalities=cat_cardinalities,
+                tower_dim=256,
+                gate_hidden=128,
+                head_hidden=[256, 128],
+                dropout=0.15,
+            )
+
+            def gated_forward(model: GatedFusionMLP, features: List[torch.Tensor]) -> torch.Tensor:
+                return model(
+                    features[0],
+                    features[1],
+                    features[2],
+                    features[3],
+                    features[4].long(),
+                    features[5],
+                )
+
+            _best_gated_state, gated_curves = fit_torch_model(
+                model=gated_model,
+                train_loader=train_loader_gated,
+                val_loader=val_loader_gated,
+                device=device,
+                max_epochs=args.max_epochs,
+                patience=args.patience,
+                learning_rate=7e-4,
+                weight_decay=1e-4,
+                batch_forward=gated_forward,
+            )
+            model_curves["gated_fusion_mlp"] = gated_curves
+            pred_val_map["gated_fusion_mlp"] = predict_torch_model(gated_model, val_loader_gated, device, gated_forward)
+            pred_test_map["gated_fusion_mlp"] = predict_torch_model(gated_model, test_loader_gated, device, gated_forward)
+
+        if "ridge" in requested_models:
+            ridge_pipe, ridge_preds = fit_ridge_model(
+                metadata=joined[numeric_cols + categorical_cols].copy(),
+                fused=fused_use,
+                y=y_log,
+                split=split,
+                categorical_cols=categorical_cols,
+                numeric_cols=numeric_cols,
+            )
+            pred_val_map["ridge"] = ridge_preds["val"]
+            pred_test_map["ridge"] = ridge_preds["test"]
+
+        if "gbdt" in requested_models:
+            projector_model, projector_curves = None, {}
+            projector_model, projector_curves, projected = fit_projector(
+                fused=fused_use,
+                y=y_log,
+                split=split,
+                device=device,
+                max_epochs=max(10, min(args.max_epochs, 20)),
+                patience=max(4, min(args.patience, 8)),
+                projector_dim=args.projector_dim,
+            )
+            model_curves["gbdt_projector"] = projector_curves
+            gbdt_pipe, gbdt_preds = fit_gbdt_model(
+                metadata=joined[numeric_cols + categorical_cols].copy(),
+                projected_fused=projected,
+                y=y_log,
+                split=split,
+                categorical_cols=categorical_cols,
+                numeric_cols=numeric_cols,
+            )
+            pred_val_map["gbdt"] = gbdt_preds["val"]
+            pred_test_map["gbdt"] = gbdt_preds["test"]
 
         model_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
         model_slice_metrics: Dict[str, Dict[str, Dict[str, Dict[str, float | int]]]] = {}
-
-        pred_val_map = {
-            "concat_mlp": pred_concat_val,
-            "gated_fusion_mlp": pred_gated_val,
-            "ridge": ridge_preds["val"],
-            "gbdt": gbdt_preds["val"],
-        }
-        pred_test_map = {
-            "concat_mlp": pred_concat_test,
-            "gated_fusion_mlp": pred_gated_test,
-            "ridge": ridge_preds["test"],
-            "gbdt": gbdt_preds["test"],
-        }
 
         y_val = y_log[split.val]
         y_test = y_log[split.test]
         tp_val = text_present_use[split.val]
         tp_test = text_present_use[split.test]
 
-        for model_name in pred_val_map:
+        for model_name in requested_models:
+            if model_name not in pred_val_map:
+                continue
             val_metrics = regression_metrics(y_val, pred_val_map[model_name])
             test_metrics = regression_metrics(y_test, pred_test_map[model_name])
             model_metrics[model_name] = {"val": val_metrics, "test": test_metrics}
@@ -1104,6 +1139,9 @@ def main() -> None:
                 "val": compute_slice_metrics(y_val, pred_val_map[model_name], tp_val),
                 "test": compute_slice_metrics(y_test, pred_test_map[model_name], tp_test),
             }
+
+        if not model_metrics:
+            raise ValueError(f"No model metrics produced for model_family={args.model_family}")
 
         rank_col = args.rank_metric if str(args.rank_metric).startswith("val_") else f"val_{args.rank_metric}"
         leaderboard_rows: List[Dict[str, Any]] = []
@@ -1132,9 +1170,15 @@ def main() -> None:
 
         best_model = str(leaderboard_df.iloc[0]["model"])
 
-        snapshot_root = (
-            f"{args.snapshot_prefix.strip('/')}/run_id={run_id}/strategy={args.fusion_strategy}/horizon={args.target_horizon_days}"
-        )
+        if args.model_family == "all":
+            snapshot_root = (
+                f"{args.snapshot_prefix.strip('/')}/run_id={run_id}/strategy={args.fusion_strategy}/horizon={args.target_horizon_days}"
+            )
+        else:
+            snapshot_root = (
+                f"{args.snapshot_prefix.strip('/')}/run_id={run_id}/model={args.model_family}/"
+                f"strategy={args.fusion_strategy}/horizon={args.target_horizon_days}"
+            )
 
         artifact_dir = tmp_dir / "snapshot_artifacts"
         (artifact_dir / "models").mkdir(parents=True, exist_ok=True)
@@ -1155,12 +1199,46 @@ def main() -> None:
         split_manifest.loc[split.test, "split"] = "test"
         split_manifest.to_parquet(artifact_dir / "split_manifest.parquet", index=False)
 
+        all_hyperparams = {
+            "concat_mlp": {
+                "hidden_dims": [1024, 512, 256],
+                "dropout": 0.2,
+                "lr": 1e-3,
+                "weight_decay": 1e-4,
+                "max_epochs": int(args.max_epochs),
+                "patience": int(args.patience),
+            },
+            "gated_fusion_mlp": {
+                "tower_dim": 256,
+                "gate_hidden": 128,
+                "head_hidden": [256, 128],
+                "dropout": 0.15,
+                "lr": 7e-4,
+                "weight_decay": 1e-4,
+                "max_epochs": int(args.max_epochs),
+                "patience": int(args.patience),
+            },
+            "ridge": {
+                "alphas": [0.1, 0.3, 1, 3, 10, 30, 100],
+            },
+            "gbdt": {
+                "learning_rate": 0.05,
+                "max_depth": 6,
+                "max_iter": 500,
+                "min_samples_leaf": 20,
+                "l2_regularization": 1e-4,
+                "projector_dim": int(args.projector_dim),
+            },
+        }
+
         config_used = {
             "generated_at": utc_now_iso(),
             "run_id": run_id,
             "git_sha": get_git_sha(),
             "fusion_strategy": args.fusion_strategy,
             "target_horizon_days": int(args.target_horizon_days),
+            "model_family": args.model_family,
+            "trained_models": requested_models,
             "target_transform": "log1p(horizon_view_count)",
             "seed": int(args.seed),
             "splits": {
@@ -1177,37 +1255,7 @@ def main() -> None:
             "excluded_high_card": sorted(HIGH_CARD_EXCLUDE),
             "excluded_leakage": sorted(LEAKAGE_COLUMNS),
             "fused_manifest_s3_key": args.fused_manifest_s3_key,
-            "hyperparams": {
-                "concat_mlp": {
-                    "hidden_dims": [1024, 512, 256],
-                    "dropout": 0.2,
-                    "lr": 1e-3,
-                    "weight_decay": 1e-4,
-                    "max_epochs": int(args.max_epochs),
-                    "patience": int(args.patience),
-                },
-                "gated_fusion_mlp": {
-                    "tower_dim": 256,
-                    "gate_hidden": 128,
-                    "head_hidden": [256, 128],
-                    "dropout": 0.15,
-                    "lr": 7e-4,
-                    "weight_decay": 1e-4,
-                    "max_epochs": int(args.max_epochs),
-                    "patience": int(args.patience),
-                },
-                "ridge": {
-                    "alphas": [0.1, 0.3, 1, 3, 10, 30, 100],
-                },
-                "gbdt": {
-                    "learning_rate": 0.05,
-                    "max_depth": 6,
-                    "max_iter": 500,
-                    "min_samples_leaf": 20,
-                    "l2_regularization": 1e-4,
-                    "projector_dim": int(args.projector_dim),
-                },
-            },
+            "hyperparams": {k: all_hyperparams[k] for k in requested_models},
             "versions": {
                 "python": sys.version,
                 "numpy": np.__version__,
@@ -1262,6 +1310,8 @@ def main() -> None:
             "run_id": run_id,
             "fusion_strategy": args.fusion_strategy,
             "target_horizon_days": int(args.target_horizon_days),
+            "model_family": args.model_family,
+            "trained_models": requested_models,
             "target_transform": "log1p(horizon_view_count)",
             "rank_metric": rank_col,
             "best_model": best_model,
@@ -1277,60 +1327,60 @@ def main() -> None:
         )
         leaderboard_df.to_csv(artifact_dir / "leaderboard.csv", index=False)
 
-        concat_ckpt = {
-            "model_state_dict": concat_model.state_dict(),
-            "model_config": {
-                "fused_dim": int(fused_use.shape[1]),
-                "numeric_dim": int(nn_num.shape[1]),
-                "cat_cardinalities": cat_cardinalities,
-            },
-            "preprocess": {
-                "numeric_cols": nn_bundle.numeric_cols,
-                "categorical_cols": nn_bundle.categorical_cols,
-                "num_median": nn_bundle.num_median,
-                "num_mean": nn_bundle.num_mean,
-                "num_std": nn_bundle.num_std,
-                "cat_mappings": nn_bundle.cat_mappings,
-            },
+        preprocess_bundle = {
+            "numeric_cols": nn_bundle.numeric_cols,
+            "categorical_cols": nn_bundle.categorical_cols,
+            "num_median": nn_bundle.num_median,
+            "num_mean": nn_bundle.num_mean,
+            "num_std": nn_bundle.num_std,
+            "cat_mappings": nn_bundle.cat_mappings,
         }
-        torch.save(concat_ckpt, artifact_dir / "models" / "concat_mlp.pt")
 
-        gated_ckpt = {
-            "model_state_dict": gated_model.state_dict(),
-            "model_config": {
-                "video_dim": int(video_use.shape[1]),
-                "audio_dim": int(audio_use.shape[1]),
-                "text_dim": int(text_use.shape[1]),
-                "numeric_dim": int(nn_num.shape[1]),
-                "cat_cardinalities": cat_cardinalities,
-            },
-            "preprocess": concat_ckpt["preprocess"],
-        }
-        torch.save(gated_ckpt, artifact_dir / "models" / "gated_fusion_mlp.pt")
+        if concat_model is not None:
+            concat_ckpt = {
+                "model_state_dict": concat_model.state_dict(),
+                "model_config": {
+                    "fused_dim": int(fused_use.shape[1]),
+                    "numeric_dim": int(nn_num.shape[1]),
+                    "cat_cardinalities": cat_cardinalities,
+                },
+                "preprocess": preprocess_bundle,
+            }
+            torch.save(concat_ckpt, artifact_dir / "models" / "concat_mlp.pt")
 
-        joblib.dump(ridge_pipe, artifact_dir / "models" / "ridge.joblib")
-        joblib.dump(gbdt_pipe, artifact_dir / "models" / "gbdt.joblib")
-        torch.save(
-            {
-                "state_dict": projector_model.state_dict(),
-                "input_dim": int(fused_use.shape[1]),
-                "projector_dim": int(args.projector_dim),
-            },
-            artifact_dir / "models" / "gbdt_projector.pt",
-        )
+        if gated_model is not None:
+            gated_ckpt = {
+                "model_state_dict": gated_model.state_dict(),
+                "model_config": {
+                    "video_dim": int(video_use.shape[1]),
+                    "audio_dim": int(audio_use.shape[1]),
+                    "text_dim": int(text_use.shape[1]),
+                    "numeric_dim": int(nn_num.shape[1]),
+                    "cat_cardinalities": cat_cardinalities,
+                },
+                "preprocess": preprocess_bundle,
+            }
+            torch.save(gated_ckpt, artifact_dir / "models" / "gated_fusion_mlp.pt")
 
-        (artifact_dir / "curves" / "concat_mlp_curve.json").write_text(
-            json.dumps(concat_curves, indent=2),
-            encoding="utf-8",
-        )
-        (artifact_dir / "curves" / "gated_fusion_mlp_curve.json").write_text(
-            json.dumps(gated_curves, indent=2),
-            encoding="utf-8",
-        )
-        (artifact_dir / "curves" / "gbdt_projector_curve.json").write_text(
-            json.dumps(projector_curves, indent=2),
-            encoding="utf-8",
-        )
+        if ridge_pipe is not None:
+            joblib.dump(ridge_pipe, artifact_dir / "models" / "ridge.joblib")
+        if gbdt_pipe is not None:
+            joblib.dump(gbdt_pipe, artifact_dir / "models" / "gbdt.joblib")
+        if projector_model is not None:
+            torch.save(
+                {
+                    "state_dict": projector_model.state_dict(),
+                    "input_dim": int(fused_use.shape[1]),
+                    "projector_dim": int(args.projector_dim),
+                },
+                artifact_dir / "models" / "gbdt_projector.pt",
+            )
+
+        for curve_name, curve_payload in model_curves.items():
+            (artifact_dir / "curves" / f"{curve_name}_curve.json").write_text(
+                json.dumps(curve_payload, indent=2),
+                encoding="utf-8",
+            )
 
         val_pred_df = pd.DataFrame(
             {
@@ -1338,18 +1388,13 @@ def main() -> None:
                 "text_present": text_present_use[split.val].reshape(-1),
                 "y_true_log": y_val,
                 "y_true_raw": np.expm1(np.clip(y_val, -20, 30)),
-                "pred_concat_mlp_log": pred_concat_val,
-                "pred_gated_fusion_mlp_log": pred_gated_val,
-                "pred_ridge_log": ridge_preds["val"],
-                "pred_gbdt_log": gbdt_preds["val"],
             }
         )
-        for col in [
-            "pred_concat_mlp_log",
-            "pred_gated_fusion_mlp_log",
-            "pred_ridge_log",
-            "pred_gbdt_log",
-        ]:
+        for model_name in requested_models:
+            if model_name not in pred_val_map:
+                continue
+            col = f"pred_{model_name}_log"
+            val_pred_df[col] = pred_val_map[model_name]
             val_pred_df[col.replace("_log", "_raw")] = np.clip(np.expm1(np.clip(val_pred_df[col], -20, 30)), 0.0, None)
         val_pred_df.to_parquet(artifact_dir / "predictions" / "val.parquet", index=False)
 
@@ -1359,18 +1404,13 @@ def main() -> None:
                 "text_present": text_present_use[split.test].reshape(-1),
                 "y_true_log": y_test,
                 "y_true_raw": np.expm1(np.clip(y_test, -20, 30)),
-                "pred_concat_mlp_log": pred_concat_test,
-                "pred_gated_fusion_mlp_log": pred_gated_test,
-                "pred_ridge_log": ridge_preds["test"],
-                "pred_gbdt_log": gbdt_preds["test"],
             }
         )
-        for col in [
-            "pred_concat_mlp_log",
-            "pred_gated_fusion_mlp_log",
-            "pred_ridge_log",
-            "pred_gbdt_log",
-        ]:
+        for model_name in requested_models:
+            if model_name not in pred_test_map:
+                continue
+            col = f"pred_{model_name}_log"
+            test_pred_df[col] = pred_test_map[model_name]
             test_pred_df[col.replace("_log", "_raw")] = np.clip(np.expm1(np.clip(test_pred_df[col], -20, 30)), 0.0, None)
         test_pred_df.to_parquet(artifact_dir / "predictions" / "test.parquet", index=False)
 
@@ -1378,6 +1418,7 @@ def main() -> None:
 
         print("Training suite summary")
         print(f"run_id: {run_id}")
+        print(f"model_family: {args.model_family}")
         print(f"fusion_strategy: {args.fusion_strategy}")
         print(f"target_horizon_days: {args.target_horizon_days}")
         print(f"rows_total: {len(joined)}")
@@ -1385,6 +1426,7 @@ def main() -> None:
         print(f"rows_val: {len(split.val)}")
         print(f"rows_test: {len(split.test)}")
         print(f"best_model: {best_model}")
+        print(f"trained_models: {','.join(requested_models)}")
         print(f"rank_metric: {rank_col}")
         print(f"snapshot_root: {snapshot_root}")
 

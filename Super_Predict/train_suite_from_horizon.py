@@ -12,7 +12,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Tuple
 
 import joblib
@@ -261,6 +261,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=6)
     parser.add_argument("--projector_dim", type=int, default=128)
     parser.add_argument("--text_dim", type=int, default=768)
+    parser.add_argument("--artifact_cache_dir", default=os.getenv("TRAIN_ARTIFACT_CACHE_DIR", ""))
     return parser.parse_args()
 
 
@@ -376,6 +377,8 @@ def load_sharded_vectors(
     s3: S3ArtifactStore,
     manifest: pd.DataFrame,
     text_dim_default: int,
+    need_modalities: bool,
+    download_root: Path,
 ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     required_cols = {"video_id", "fused_key", "shard_idx"}
     missing = sorted(required_cols - set(manifest.columns))
@@ -389,21 +392,31 @@ def load_sharded_vectors(
 
     shard_cache: Dict[str, np.lib.npyio.NpzFile] = {}
     emb_cache: Dict[str, np.ndarray] = {}
+    download_root = Path(download_root)
+    download_root.mkdir(parents=True, exist_ok=True)
 
-    def fetch_shard_vec(key: str, idx: int, tmp_dir: Path) -> np.ndarray:
+    def local_path_for_key(key: str) -> Path:
+        rel = Path(*PurePosixPath(str(key)).parts)
+        return download_root / rel
+
+    def fetch_shard_vec(key: str, idx: int) -> np.ndarray:
         if key not in shard_cache:
-            local = tmp_dir / Path(key).name
-            s3.download_file(key, local)
+            local = local_path_for_key(key)
+            local.parent.mkdir(parents=True, exist_ok=True)
+            if not local.exists():
+                s3.download_file(key, local)
             shard_cache[key] = np.load(local, allow_pickle=True)
         shard = shard_cache[key]
         arr = np.asarray(shard["vectors"][idx], dtype=np.float32).reshape(-1)
         return arr
 
-    def fetch_emb_vec(key: str, tmp_dir: Path) -> np.ndarray:
+    def fetch_emb_vec(key: str) -> np.ndarray:
         if key in emb_cache:
             return emb_cache[key]
-        local = tmp_dir / (Path(key).name + ".npy")
-        s3.download_file(key, local)
+        local = local_path_for_key(key)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        if not local.exists():
+            s3.download_file(key, local)
         vec = np.asarray(np.load(local, allow_pickle=True), dtype=np.float32).reshape(-1)
         emb_cache[key] = vec
         return vec
@@ -417,33 +430,32 @@ def load_sharded_vectors(
 
     inferred_text_dim: int | None = None
 
-    with tempfile.TemporaryDirectory(prefix="train_vectors_") as tmp_dir_raw:
-        tmp_dir = Path(tmp_dir_raw)
-        for row in mf.itertuples(index=False):
-            video_id = str(row.video_id)
-            fused_key = str(row.fused_key)
-            shard_idx = int(row.shard_idx)
-            try:
-                fused = fetch_shard_vec(fused_key, shard_idx, tmp_dir)
-            except Exception:
-                continue
+    for row in mf.itertuples(index=False):
+        video_id = str(row.video_id)
+        fused_key = str(row.fused_key)
+        shard_idx = int(row.shard_idx)
+        try:
+            fused = fetch_shard_vec(fused_key, shard_idx)
+        except Exception:
+            continue
 
-            # For gated model we need modality vectors; skip rows where required modality keys are absent.
+        text_present = int(getattr(row, "text_present", 1) or 0)
+
+        if need_modalities:
             if not all(hasattr(row, col) for col in ["video_emb_key", "audio_emb_key", "text_emb_key"]):
                 continue
 
             try:
-                video_vec = fetch_emb_vec(str(row.video_emb_key), tmp_dir)
-                audio_vec = fetch_emb_vec(str(row.audio_emb_key), tmp_dir)
+                video_vec = fetch_emb_vec(str(row.video_emb_key))
+                audio_vec = fetch_emb_vec(str(row.audio_emb_key))
             except Exception:
                 continue
 
-            text_present = int(getattr(row, "text_present", 1) or 0)
             text_key = str(getattr(row, "text_emb_key", "") or "")
             text_vec: np.ndarray
             if text_present == 1 and text_key:
                 try:
-                    text_vec = fetch_emb_vec(text_key, tmp_dir)
+                    text_vec = fetch_emb_vec(text_key)
                 except Exception:
                     text_present = 0
                     text_vec = np.zeros((inferred_text_dim or text_dim_default,), dtype=np.float32)
@@ -460,29 +472,46 @@ def load_sharded_vectors(
                     padded[: text_vec.shape[0]] = text_vec
                     text_vec = padded
 
-            rows.append(
-                {
-                    "video_id": video_id,
-                    "text_present": int(text_present),
-                    "captured_at": str(getattr(row, "captured_at", "")),
-                }
-            )
-            fused_list.append(fused)
             video_list.append(video_vec)
             audio_list.append(audio_vec)
             text_list.append(text_vec)
-            text_present_list.append(np.array([float(text_present)], dtype=np.float32))
+
+        rows.append(
+            {
+                "video_id": video_id,
+                "text_present": int(text_present),
+                "captured_at": str(getattr(row, "captured_at", "")),
+            }
+        )
+        fused_list.append(fused)
+        text_present_list.append(np.array([float(text_present)], dtype=np.float32))
 
     if not rows:
         raise ValueError("No usable rows after loading fused/modality vectors")
+
+    if need_modalities:
+        video_arr = np.stack(video_list).astype(np.float32)
+        audio_arr = np.stack(audio_list).astype(np.float32)
+        text_arr = np.stack(text_list).astype(np.float32)
+    else:
+        n = len(rows)
+        video_arr = np.zeros((n, 0), dtype=np.float32)
+        audio_arr = np.zeros((n, 0), dtype=np.float32)
+        text_arr = np.zeros((n, 0), dtype=np.float32)
+
+    for shard in shard_cache.values():
+        try:
+            shard.close()
+        except Exception:
+            pass
 
     out_df = pd.DataFrame(rows)
     return (
         out_df,
         np.stack(fused_list).astype(np.float32),
-        np.stack(video_list).astype(np.float32),
-        np.stack(audio_list).astype(np.float32),
-        np.stack(text_list).astype(np.float32),
+        video_arr,
+        audio_arr,
+        text_arr,
         np.stack(text_present_list).astype(np.float32),
     )
 
@@ -734,7 +763,7 @@ def fit_ridge_model(
                 "cat",
                 Pipeline([
                     ("imputer", SimpleImputer(strategy="most_frequent")),
-                    ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+                    ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=True)),
                 ]),
                 cat_cols,
             ),
@@ -909,6 +938,14 @@ def main() -> None:
         if fused_manifest.empty:
             raise ValueError("No rows in fused manifest after strategy filter")
 
+        requested_models = selected_models(args.model_family)
+        need_modalities = "gated_fusion_mlp" in requested_models
+        if args.artifact_cache_dir:
+            cache_root = Path(args.artifact_cache_dir).expanduser()
+        else:
+            cache_root = tmp_dir / "artifact_cache"
+        cache_root.mkdir(parents=True, exist_ok=True)
+
         (
             emb_meta_df,
             fused_mat,
@@ -916,7 +953,13 @@ def main() -> None:
             audio_mat,
             text_mat,
             text_present_arr,
-        ) = load_sharded_vectors(s3=s3, manifest=fused_manifest, text_dim_default=args.text_dim)
+        ) = load_sharded_vectors(
+            s3=s3,
+            manifest=fused_manifest,
+            text_dim_default=args.text_dim,
+            need_modalities=need_modalities,
+            download_root=cache_root,
+        )
 
         joined = emb_meta_df.merge(metadata_df, on="video_id", how="inner")
         if joined.empty:
@@ -948,8 +991,6 @@ def main() -> None:
 
         nn_bundle = fit_nn_metadata_bundle(joined, split.train, numeric_cols=numeric_cols, categorical_cols=categorical_cols)
         nn_num, nn_cat, cat_cardinalities = transform_nn_metadata(joined, nn_bundle)
-
-        requested_models = selected_models(args.model_family)
 
         payload_concat = {
             "fused": fused_use.astype(np.float32),
@@ -1255,6 +1296,7 @@ def main() -> None:
             "excluded_high_card": sorted(HIGH_CARD_EXCLUDE),
             "excluded_leakage": sorted(LEAKAGE_COLUMNS),
             "fused_manifest_s3_key": args.fused_manifest_s3_key,
+            "artifact_cache_dir": str(cache_root),
             "hyperparams": {k: all_hyperparams[k] for k in requested_models},
             "versions": {
                 "python": sys.version,
@@ -1428,6 +1470,7 @@ def main() -> None:
         print(f"best_model: {best_model}")
         print(f"trained_models: {','.join(requested_models)}")
         print(f"rank_metric: {rank_col}")
+        print(f"artifact_cache_dir: {cache_root}")
         print(f"snapshot_root: {snapshot_root}")
 
 

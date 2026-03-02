@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run_id", default="")
     parser.add_argument("--strategies", default="concat,sum_pool,max_pool")
     parser.add_argument("--horizons", default="7,30")
+    parser.add_argument("--artifact_cache_dir", default=os.getenv("TRAIN_ARTIFACT_CACHE_DIR", "/tmp/clipfarm_train_cache"))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rank_metric", default="rmse_log")
     parser.add_argument("--max_epochs", type=int, default=40)
@@ -63,6 +64,8 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     train_script = repo_root / "Super_Predict" / "train_suite_from_horizon.py"
     aggregate_script = repo_root / "Super_Predict" / "aggregate_train_suite_results.py"
+    cache_root = Path(args.artifact_cache_dir).expanduser() / run_id / args.model_family
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     for strategy in strategies:
         for horizon in horizons:
@@ -88,6 +91,8 @@ def main() -> None:
                 args.snapshot_prefix,
                 "--run_id",
                 run_id,
+                "--artifact_cache_dir",
+                str(cache_root),
                 "--seed",
                 str(args.seed),
                 "--rank_metric",
@@ -128,6 +133,7 @@ def main() -> None:
     print(f"model_family: {args.model_family}")
     print(f"strategies: {','.join(strategies)}")
     print(f"horizons: {','.join(str(h) for h in horizons)}")
+    print(f"artifact_cache_dir: {cache_root}")
     print(
         "comparison_s3_prefix: "
         f"{args.snapshot_prefix.strip('/')}/run_id={run_id}/comparison"

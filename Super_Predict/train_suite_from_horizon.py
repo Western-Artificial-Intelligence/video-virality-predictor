@@ -298,7 +298,7 @@ def to_numeric_bool(series: pd.Series) -> pd.Series:
 
 
 def build_metadata_frame(metadata_csv: Path, horizon_days: int) -> pd.DataFrame:
-    df = pd.read_csv(metadata_csv)
+    df = pd.read_csv(metadata_csv, low_memory=False)
     if "horizon_days" not in df.columns or "horizon_view_count" not in df.columns:
         raise ValueError("metadata CSV must include horizon_days and horizon_view_count")
 
@@ -346,7 +346,11 @@ def get_feature_columns(df: pd.DataFrame) -> Tuple[List[str], List[str], List[st
     }
     protected_cols.update({f"_forbidden_{c}" for c in LEAKAGE_COLUMNS})
 
-    candidate_cols = [c for c in df.columns if c not in protected_cols and not c.startswith("_forbidden_")]
+    candidate_cols = [
+        c
+        for c in df.columns
+        if c not in protected_cols and not c.startswith("_forbidden_") and c not in LEAKAGE_COLUMNS
+    ]
     dropped_cols = sorted([c for c in candidate_cols if c in HIGH_CARD_EXCLUDE])
     candidate_cols = [c for c in candidate_cols if c not in HIGH_CARD_EXCLUDE]
 

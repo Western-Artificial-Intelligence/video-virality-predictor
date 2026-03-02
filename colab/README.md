@@ -16,14 +16,24 @@ So each notebook produces **6 training outputs** under one `run_id`.
 
 ## Required Inputs
 
-- AWS credentials in Colab environment:
+- AWS credentials in Colab Secrets:
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
+- Optional Colab secret for private repos:
+  - `GITHUB_TOKEN`
 - S3 target:
   - `S3_BUCKET`
   - `AWS_REGION`
 - Repo checkout available in Colab filesystem (default path in notebooks):
   - `/content/video-virality-predictor`
+
+Each notebook bootstrap cell pulls secrets with:
+
+`from google.colab import userdata`
+
+`userdata.get("SECRET_NAME")`
+
+and handles clone/update automatically.
 
 ## Output Layout
 

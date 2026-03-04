@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -168,23 +168,82 @@ def try_caption_first(url: str, video_id: str, opts: Dict) -> Tuple[Optional[str
 
 
 def transcribe_faster_whisper(audio_path: Path, model_name: str) -> Tuple[str, Dict]:
-    from faster_whisper import WhisperModel  # type: ignore
+    from faster_whisper import BatchedInferencePipeline, WhisperModel  # type: ignore
+
+    def _env_bool(name: str, default: bool) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+    device = (os.getenv("FASTER_WHISPER_DEVICE", "auto") or "auto").strip().lower()
+    gpu_available = shutil.which("nvidia-smi") is not None
+    compute_type = (os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "") or "").strip()
+    if not compute_type:
+        if device in {"cuda", "gpu"}:
+            compute_type = "float16"
+        elif device == "auto" and gpu_available:
+            compute_type = "float16"
+        else:
+            compute_type = "int8"
+    cpu_threads = int(os.getenv("FASTER_WHISPER_CPU_THREADS", "0") or 0)
+    beam_size = int(os.getenv("FASTER_WHISPER_BEAM_SIZE", "1") or 1)
+    best_of = int(os.getenv("FASTER_WHISPER_BEST_OF", "1") or 1)
+    vad_filter = _env_bool("FASTER_WHISPER_VAD_FILTER", True)
+    batched = _env_bool("FASTER_WHISPER_BATCHED", device in {"cuda", "gpu"} or (device == "auto" and gpu_available))
+    batch_size = int(os.getenv("FASTER_WHISPER_BATCH_SIZE", "16") or 16)
+    language = (os.getenv("FASTER_WHISPER_LANGUAGE", "") or "").strip() or None
 
     fw_models = getattr(_THREAD_LOCAL, "fw_models", None)
     if fw_models is None:
         fw_models = {}
         _THREAD_LOCAL.fw_models = fw_models
 
-    model = fw_models.get(model_name)
+    model_key = (model_name, device, compute_type, cpu_threads)
+    model = fw_models.get(model_key)
     if model is None:
-        model = WhisperModel(model_name, device="auto", compute_type="int8")
-        fw_models[model_name] = model
-    segments, info = model.transcribe(str(audio_path), vad_filter=True)
+        kwargs = {"device": device, "compute_type": compute_type}
+        if cpu_threads > 0:
+            kwargs["cpu_threads"] = cpu_threads
+        model = WhisperModel(model_name, **kwargs)
+        fw_models[model_key] = model
+
+    if batched:
+        fw_pipelines = getattr(_THREAD_LOCAL, "fw_pipelines", None)
+        if fw_pipelines is None:
+            fw_pipelines = {}
+            _THREAD_LOCAL.fw_pipelines = fw_pipelines
+        pipe = fw_pipelines.get(model_key)
+        if pipe is None:
+            pipe = BatchedInferencePipeline(model=model)
+            fw_pipelines[model_key] = pipe
+        segments, info = pipe.transcribe(
+            str(audio_path),
+            vad_filter=vad_filter,
+            beam_size=beam_size,
+            best_of=best_of,
+            language=language,
+            batch_size=batch_size,
+        )
+    else:
+        segments, info = model.transcribe(
+            str(audio_path),
+            vad_filter=vad_filter,
+            beam_size=beam_size,
+            best_of=best_of,
+            language=language,
+        )
     text = "".join(seg.text for seg in segments).strip()
     return text, {
         "source": "faster_whisper",
         "model": model_name,
         "language": getattr(info, "language", None),
+        "device": device,
+        "compute_type": compute_type,
+        "beam_size": beam_size,
+        "best_of": best_of,
+        "batched": batched,
+        "batch_size": batch_size if batched else None,
     }
 
 
@@ -253,7 +312,7 @@ def _resolve_whisper_cpp_model(model_name: str, explicit_model_dir: str = "") ->
 
 
 def _parse_whisper_cpp_json(json_path: Path) -> Tuple[str, Optional[str], list]:
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    payload = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
     language = None
     result = payload.get("result")
     if isinstance(result, dict):
@@ -296,6 +355,7 @@ def transcribe_whisper_cpp(
     whisper_cpp_model_dir: str = "",
     whisper_cpp_threads: int = 0,
     emit_subtitles: bool = True,
+    no_gpu: bool = True,
 ) -> Tuple[str, Dict]:
     bin_path = _resolve_whisper_cpp_bin(whisper_cpp_bin)
     model_path = _resolve_whisper_cpp_model(model_name=model_name, explicit_model_dir=whisper_cpp_model_dir)
@@ -341,6 +401,9 @@ def transcribe_whisper_cpp(
                 str(out_prefix),
             ],
         ]
+        if no_gpu:
+            cmd_variants[0].append("--no-gpu")
+            cmd_variants[1].append("-ng")
         if emit_subtitles:
             cmd_variants[0].extend(["--output-srt", "--output-vtt"])
             cmd_variants[1].extend(["-osrt", "-ovtt"])
@@ -348,12 +411,20 @@ def transcribe_whisper_cpp(
         last_error = ""
         success = False
         for cmd in cmd_variants:
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            proc = subprocess.run(cmd, capture_output=True, text=False)
             if proc.returncode == 0 and json_path.exists():
                 success = True
                 break
-            stderr = (proc.stderr or "").strip()
-            stdout = (proc.stdout or "").strip()
+            stderr = (
+                proc.stderr.decode("utf-8", errors="replace").strip()
+                if isinstance(proc.stderr, (bytes, bytearray))
+                else str(proc.stderr or "").strip()
+            )
+            stdout = (
+                proc.stdout.decode("utf-8", errors="replace").strip()
+                if isinstance(proc.stdout, (bytes, bytearray))
+                else str(proc.stdout or "").strip()
+            )
             last_error = stderr or stdout or f"exit_code={proc.returncode}"
 
         if not success:
@@ -422,6 +493,7 @@ def transcribe_openai_api(audio_path: Path, model_name: str) -> Tuple[str, Dict]
 
 def transcribe_audio(audio_path: Path, backend: str, model_name: str) -> Tuple[str, Dict]:
     backend = (backend or "auto").lower()
+    whisper_cpp_no_gpu = os.getenv("WHISPER_CPP_NO_GPU", "1").strip().lower() not in {"0", "false", "no"}
 
     if backend == "faster_whisper":
         return transcribe_faster_whisper(audio_path, model_name)
@@ -433,6 +505,7 @@ def transcribe_audio(audio_path: Path, backend: str, model_name: str) -> Tuple[s
             whisper_cpp_model_dir=os.getenv("WHISPER_CPP_MODEL_DIR", ""),
             whisper_cpp_threads=int(os.getenv("WHISPER_CPP_THREADS", "0") or 0),
             emit_subtitles=(os.getenv("WHISPER_CPP_EMIT_SUBTITLES", "1").strip() != "0"),
+            no_gpu=whisper_cpp_no_gpu,
         )
     if backend == "openai_api":
         return transcribe_openai_api(audio_path, model_name)
@@ -451,6 +524,7 @@ def transcribe_audio(audio_path: Path, backend: str, model_name: str) -> Tuple[s
                     whisper_cpp_model_dir=os.getenv("WHISPER_CPP_MODEL_DIR", ""),
                     whisper_cpp_threads=int(os.getenv("WHISPER_CPP_THREADS", "0") or 0),
                     emit_subtitles=(os.getenv("WHISPER_CPP_EMIT_SUBTITLES", "1").strip() != "0"),
+                    no_gpu=whisper_cpp_no_gpu,
                 )
             return transcribe_openai_api(audio_path, "whisper-1")
         except Exception as exc:
@@ -513,6 +587,7 @@ def process_text_item(
         if not text:
             wav_path = audio_dir / f"{item.video_id}.wav"
             downloaded_audio = False
+            cloud_audio_error = ""
             if not wav_path.exists() and uploader.enabled and args.download_audio_from_cloud_if_missing:
                 try:
                     uploader.download_file(
@@ -520,10 +595,14 @@ def process_text_item(
                         wav_path,
                     )
                     downloaded_audio = True
-                except Exception:
+                except Exception as exc:
                     downloaded_audio = False
+                    cloud_audio_error = str(exc)
 
             if not wav_path.exists():
+                audio_error = "audio_not_found"
+                if uploader.enabled and args.download_audio_from_cloud_if_missing and cloud_audio_error:
+                    audio_error = f"audio_not_found | cloud_download_error: {cloud_audio_error}"
                 payload = {
                     "video_id": item.video_id,
                     "video_url": item.video_url,
@@ -533,14 +612,14 @@ def process_text_item(
                     "caption_lang": meta.get("caption_lang"),
                     "caption_is_auto": bool(meta.get("caption_is_auto", False)),
                     "transcript": "",
-                    "error": "audio_not_found",
+                    "error": audio_error,
                 }
                 write_text_json(out_path, payload)
                 return {
                     "video_id": item.video_id,
                     "source_hash": item.source_hash,
                     "status": "missing_audio",
-                    "error": "audio_not_found",
+                    "error": audio_error,
                 }
 
             asr_text, asr_meta = transcribe_audio(
@@ -671,6 +750,57 @@ def main() -> None:
         help="Model name for local backends (e.g., tiny/base/small/medium/large-v3). openai_api always uses whisper-1.",
     )
     parser.add_argument(
+        "--faster_whisper_device",
+        default=os.getenv("FASTER_WHISPER_DEVICE", "auto"),
+        help="faster-whisper device (auto|cpu|cuda).",
+    )
+    parser.add_argument(
+        "--faster_whisper_compute_type",
+        default=os.getenv("FASTER_WHISPER_COMPUTE_TYPE", ""),
+        help="faster-whisper compute type (e.g., float16, int8_float16, int8). Empty = auto.",
+    )
+    parser.add_argument(
+        "--faster_whisper_batch_size",
+        type=int,
+        default=int(os.getenv("FASTER_WHISPER_BATCH_SIZE", "16") or 16),
+        help="faster-whisper batch size when batched inference is enabled.",
+    )
+    parser.add_argument(
+        "--faster_whisper_cpu_threads",
+        type=int,
+        default=int(os.getenv("FASTER_WHISPER_CPU_THREADS", "0") or 0),
+        help="faster-whisper CPU threads (0 = backend default).",
+    )
+    parser.add_argument(
+        "--faster_whisper_beam_size",
+        type=int,
+        default=int(os.getenv("FASTER_WHISPER_BEAM_SIZE", "1") or 1),
+        help="faster-whisper beam size.",
+    )
+    parser.add_argument(
+        "--faster_whisper_best_of",
+        type=int,
+        default=int(os.getenv("FASTER_WHISPER_BEST_OF", "1") or 1),
+        help="faster-whisper best_of.",
+    )
+    parser.add_argument(
+        "--faster_whisper_language",
+        default=os.getenv("FASTER_WHISPER_LANGUAGE", ""),
+        help="Optional forced language for faster-whisper (empty = auto detect).",
+    )
+    parser.add_argument(
+        "--faster_whisper_batched",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable batched faster-whisper inference. Omit to use backend default.",
+    )
+    parser.add_argument(
+        "--faster_whisper_vad_filter",
+        action=argparse.BooleanOptionalAction,
+        default=(os.getenv("FASTER_WHISPER_VAD_FILTER", "1").strip().lower() not in {"0", "false", "no", "off"}),
+        help="Enable faster-whisper VAD filtering.",
+    )
+    parser.add_argument(
         "--whisper_cpp_bin",
         default=os.getenv("WHISPER_CPP_BIN", ""),
         help="Optional whisper.cpp binary path/name (default: env WHISPER_CPP_BIN or auto-detect).",
@@ -691,6 +821,12 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=(os.getenv("WHISPER_CPP_EMIT_SUBTITLES", "1").strip() != "0"),
         help="Emit subtitle payload (SRT/VTT) from whisper.cpp when available.",
+    )
+    parser.add_argument(
+        "--whisper_cpp_no_gpu",
+        action=argparse.BooleanOptionalAction,
+        default=(os.getenv("WHISPER_CPP_NO_GPU", "1").strip() != "0"),
+        help="Run whisper.cpp with CPU only (--no-gpu) for stability.",
     )
     parser.add_argument(
         "--cloud_root_uri",
@@ -719,11 +855,37 @@ def main() -> None:
     args = parser.parse_args()
     caption_opts = build_caption_ydl_opts(args, args.player_clients)
 
+    workers = max(1, int(args.max_workers))
+    if (args.asr_backend in {"faster_whisper", "auto"}) and args.faster_whisper_device.strip().lower() in {"cuda", "gpu"} and workers > 1:
+        print(
+            f"[text] forcing max_workers=1 for faster-whisper GPU (requested={workers}) to avoid VRAM contention",
+            flush=True,
+        )
+        workers = 1
+    if args.whisper_cpp_threads <= 0:
+        # Avoid CPU oversubscription: N workers x T threads.
+        # Keep whisper.cpp threads conservative by default when parallel workers are enabled.
+        cpu_count = os.cpu_count() or 1
+        args.whisper_cpp_threads = max(1, min(4, cpu_count // workers))
+
     # Keep transcribe_audio signature stable; transport whisper.cpp knobs via env.
     os.environ["WHISPER_CPP_BIN"] = (args.whisper_cpp_bin or "").strip()
     os.environ["WHISPER_CPP_MODEL_DIR"] = (args.whisper_cpp_model_dir or "").strip()
     os.environ["WHISPER_CPP_THREADS"] = str(int(args.whisper_cpp_threads))
     os.environ["WHISPER_CPP_EMIT_SUBTITLES"] = "1" if args.whisper_cpp_emit_subtitles else "0"
+    os.environ["WHISPER_CPP_NO_GPU"] = "1" if args.whisper_cpp_no_gpu else "0"
+    os.environ["FASTER_WHISPER_DEVICE"] = (args.faster_whisper_device or "auto").strip()
+    os.environ["FASTER_WHISPER_COMPUTE_TYPE"] = (args.faster_whisper_compute_type or "").strip()
+    os.environ["FASTER_WHISPER_BATCH_SIZE"] = str(max(1, int(args.faster_whisper_batch_size)))
+    os.environ["FASTER_WHISPER_CPU_THREADS"] = str(max(0, int(args.faster_whisper_cpu_threads)))
+    os.environ["FASTER_WHISPER_BEAM_SIZE"] = str(max(1, int(args.faster_whisper_beam_size)))
+    os.environ["FASTER_WHISPER_BEST_OF"] = str(max(1, int(args.faster_whisper_best_of)))
+    if args.faster_whisper_batched is None:
+        os.environ.pop("FASTER_WHISPER_BATCHED", None)
+    else:
+        os.environ["FASTER_WHISPER_BATCHED"] = "1" if args.faster_whisper_batched else "0"
+    os.environ["FASTER_WHISPER_VAD_FILTER"] = "1" if args.faster_whisper_vad_filter else "0"
+    os.environ["FASTER_WHISPER_LANGUAGE"] = (args.faster_whisper_language or "").strip()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -756,7 +918,6 @@ def main() -> None:
                 continue
             pending.append((idx, item))
 
-        workers = max(1, int(args.max_workers))
         if workers == 1:
             for idx, item in pending:
                 print(f"[text] {idx}/{total} {item.video_id}: start", flush=True)
@@ -778,30 +939,44 @@ def main() -> None:
                 print(f"[text] {idx}/{total} {item.video_id}: {result['status']}", flush=True)
         else:
             with ThreadPoolExecutor(max_workers=workers) as executor:
+                next_pos = 0
                 futures = {}
-                for idx, item in pending:
+
+                def submit_next() -> bool:
+                    nonlocal next_pos
+                    if next_pos >= len(pending):
+                        return False
+                    idx, item = pending[next_pos]
+                    next_pos += 1
                     print(f"[text] {idx}/{total} {item.video_id}: start", flush=True)
                     fut = executor.submit(process_text_item, item, args, caption_opts, out_dir, audio_dir)
                     futures[fut] = (idx, item)
+                    return True
 
-                for fut in as_completed(futures):
-                    idx, item = futures[fut]
-                    result = fut.result()
-                    result = apply_empty_transcript_retry_policy(state, result)
-                    state.upsert(
-                        result["video_id"],
-                        result["source_hash"],
-                        utc_now_iso(),
-                        result["status"],
-                        result["error"],
-                    )
-                    if result["status"] == "success":
-                        success += 1
-                    elif result["status"] == "missing_audio":
-                        missing_audio += 1
-                    else:
-                        failed += 1
-                    print(f"[text] {idx}/{total} {item.video_id}: {result['status']}", flush=True)
+                for _ in range(min(workers, len(pending))):
+                    submit_next()
+
+                while futures:
+                    done, _ = wait(set(futures.keys()), return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        idx, item = futures.pop(fut)
+                        result = fut.result()
+                        result = apply_empty_transcript_retry_policy(state, result)
+                        state.upsert(
+                            result["video_id"],
+                            result["source_hash"],
+                            utc_now_iso(),
+                            result["status"],
+                            result["error"],
+                        )
+                        if result["status"] == "success":
+                            success += 1
+                        elif result["status"] == "missing_audio":
+                            missing_audio += 1
+                        else:
+                            failed += 1
+                        print(f"[text] {idx}/{total} {item.video_id}: {result['status']}", flush=True)
+                        submit_next()
 
         print("Text downloader summary")
         print(f"metadata_rows_deduped: {len(items)}")

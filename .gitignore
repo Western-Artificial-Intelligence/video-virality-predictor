@@ -18,3 +18,5 @@ venv
 Data/raw/Video/raw_data/
 Data/raw/Audio/raw_data/
 Data/raw/Text/raw_data/
+
+/state

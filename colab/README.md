@@ -7,6 +7,8 @@ This folder contains one notebook per model family:
 - `train_ridge.ipynb`
 - `train_gbdt.ipynb`
 - `text_raw_pipeline_gpu.ipynb` (raw text collection on Colab GPU)
+- `text_sqlite_monitor.ipynb` (live sqlite progress monitor, 60s refresh)
+- `text_sqlite_monitor_s3.ipynb` (pull sqlite from S3 every 60s and monitor progress)
 
 Each notebook trains **one model family** across the full matrix:
 

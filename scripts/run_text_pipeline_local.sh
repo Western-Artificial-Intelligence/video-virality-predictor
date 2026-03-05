@@ -40,7 +40,6 @@ ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"
 ORIGIN_BRANCH="${ORIGIN_BRANCH:-main}"
 
 TEXT_ASR_BACKEND="${TEXT_ASR_BACKEND:-whisper_cpp}"
-WHISPER_CPP_NO_GPU="${WHISPER_CPP_NO_GPU:-1}"
 TEXT_ASR_MODEL="${TEXT_ASR_MODEL:-}"
 if [[ -z "$TEXT_ASR_MODEL" ]]; then
   if [[ "$TEXT_ASR_BACKEND" == "openai_api" ]]; then
@@ -190,14 +189,6 @@ text_args=(
   --max_workers "$TEXT_MAX_WORKERS"
 )
 
-if [[ "$TEXT_ASR_BACKEND" == "whisper_cpp" || "$TEXT_ASR_BACKEND" == "whisper" || "$TEXT_ASR_BACKEND" == "auto" ]]; then
-  if [[ "$WHISPER_CPP_NO_GPU" == "1" ]]; then
-    text_args+=(--whisper_cpp_no_gpu)
-  else
-    text_args+=(--no-whisper_cpp_no_gpu)
-  fi
-fi
-
 if [[ "$MAX_ITEMS" != "0" ]]; then
   text_args+=(--max_items "$MAX_ITEMS")
 fi
@@ -209,7 +200,7 @@ elif [[ -n "$COOKIES_FROM_BROWSER" ]]; then
 fi
 
 echo "[text] starting collector"
-echo "[env] python_bin=$_PYTHON_BIN asr_backend=${TEXT_ASR_BACKEND} asr_model=${TEXT_ASR_MODEL} max_workers=${TEXT_MAX_WORKERS} whisper_cpp_no_gpu=${WHISPER_CPP_NO_GPU} whisper_cpp_threads=${WHISPER_CPP_THREADS:-auto}"
+echo "[env] python_bin=$_PYTHON_BIN asr_backend=${TEXT_ASR_BACKEND} asr_model=${TEXT_ASR_MODEL} max_workers=${TEXT_MAX_WORKERS}"
 text_cmd=("$_PYTHON_BIN" "${text_args[@]}")
 PYTHONUNBUFFERED=1 "${text_cmd[@]}"
 

@@ -1,0 +1,5 @@
+run_id,model_family,run_timestamp,n_configs,strategies,horizons,best_val_mae_log
+colab-concat_mlp-20260306T054620Z,concat_mlp,2026-03-06 05:46:20+00:00,6,"concat,max_pool,sum_pool","7,30",1.180918840079798
+colab-gated_fusion_mlp-20260306T054937Z,gated_fusion_mlp,2026-03-06 05:49:37+00:00,6,"concat,max_pool,sum_pool","7,30",1.3026813497626057
+colab-gbdt-20260306T070623Z,gbdt,2026-03-06 07:06:23+00:00,6,"concat,max_pool,sum_pool","7,30",1.0721313944536515
+colab-ridge-20260306T070324Z,ridge,2026-03-06 07:03:24+00:00,6,"concat,max_pool,sum_pool","7,30",1.3134667563172522

@@ -20,6 +20,45 @@ def _log_to_raw(y_log: float) -> float:
     return float(max(np.expm1(clipped), 0.0))
 
 
+ROBUST_RANGE_MIN_SPREAD_LOG = 0.08
+ROBUST_RANGE_PAD_SCALE = 0.5
+ROBUST_RANGE_PAD_BIAS_LOG = 0.10
+
+
+def _robust_padded_range(outputs: list[dict[str, Any]]) -> dict[str, float]:
+    logs = sorted(float(row["prediction_log"]) for row in outputs)
+    if not logs:
+        raise ValueError("Cannot compute robust range for empty outputs")
+
+    if len(logs) >= 4:
+        core = logs[1:-1]
+    elif len(logs) == 3:
+        core = logs[1:2]
+    else:
+        core = logs
+
+    core_low = float(min(core))
+    core_high = float(max(core))
+    spread = float(max(core_high - core_low, ROBUST_RANGE_MIN_SPREAD_LOG))
+    pad = float(ROBUST_RANGE_PAD_SCALE * spread + ROBUST_RANGE_PAD_BIAS_LOG)
+
+    padded_low_log = core_low - pad
+    padded_high_log = core_high + pad
+    padded_low_raw = _log_to_raw(padded_low_log)
+    padded_high_raw = max(padded_low_raw, _log_to_raw(padded_high_log))
+
+    return {
+        "min_raw": float(padded_low_raw),
+        "max_raw": float(padded_high_raw),
+        "min_log": float(padded_low_log),
+        "max_log": float(padded_high_log),
+        "core_min_log": float(core_low),
+        "core_max_log": float(core_high),
+        "observed_min_log": float(min(logs)),
+        "observed_max_log": float(max(logs)),
+    }
+
+
 class PredictionService:
     def __init__(
         self,
@@ -150,18 +189,8 @@ class PredictionService:
                 "transcript": transcript_payload,
             }
 
-        range_7d = {
-            "min_raw": float(min(p["prediction_raw"] for p in horizon_outputs[7])),
-            "max_raw": float(max(p["prediction_raw"] for p in horizon_outputs[7])),
-            "min_log": float(min(p["prediction_log"] for p in horizon_outputs[7])),
-            "max_log": float(max(p["prediction_log"] for p in horizon_outputs[7])),
-        }
-        range_30d = {
-            "min_raw": float(min(p["prediction_raw"] for p in horizon_outputs[30])),
-            "max_raw": float(max(p["prediction_raw"] for p in horizon_outputs[30])),
-            "min_log": float(min(p["prediction_log"] for p in horizon_outputs[30])),
-            "max_log": float(max(p["prediction_log"] for p in horizon_outputs[30])),
-        }
+        range_7d = _robust_padded_range(horizon_outputs[7])
+        range_30d = _robust_padded_range(horizon_outputs[30])
 
         return {
             "mode": typed_mode,

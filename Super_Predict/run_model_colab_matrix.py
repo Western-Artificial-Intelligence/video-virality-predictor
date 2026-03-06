@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a single model family across fusion/horizon matrix")
     parser.add_argument("--model_family", required=True, choices=MODEL_FAMILIES)
     parser.add_argument("--metadata_csv", default="Data/raw/Metadata/shorts_metadata_horizon.csv")
+    parser.add_argument("--cluster_csv", default="Unsup_Cluster/cluster_results.csv")
     parser.add_argument("--s3_bucket", default=os.getenv("S3_BUCKET", ""))
     parser.add_argument("--s3_region", default=os.getenv("AWS_REGION", ""))
     parser.add_argument("--snapshot_prefix", default="clipfarm/models/snapshots")
@@ -75,6 +76,8 @@ def main() -> None:
                 str(train_script),
                 "--metadata_csv",
                 args.metadata_csv,
+                "--cluster_csv",
+                args.cluster_csv,
                 "--s3_bucket",
                 args.s3_bucket,
                 "--s3_region",

@@ -29,6 +29,7 @@ fi
 
 AWS_REGION="${AWS_REGION:-}"
 METADATA_CSV="${METADATA_CSV:-Data/raw/Metadata/shorts_metadata_horizon.csv}"
+CLUSTER_CSV="${CLUSTER_CSV:-Unsup_Cluster/cluster_results.csv}"
 SNAPSHOT_PREFIX="${SNAPSHOT_PREFIX:-clipfarm/models/snapshots}"
 RUN_ID="${RUN_ID:-local-$(date -u +%Y%m%dT%H%M%SZ)}"
 MAX_PARALLEL="${MAX_PARALLEL:-2}"
@@ -80,6 +81,10 @@ if [[ ! -f "$METADATA_CSV" ]]; then
   echo "ERROR: metadata csv not found: $METADATA_CSV"
   exit 1
 fi
+if [[ -n "$CLUSTER_CSV" && ! -f "$CLUSTER_CSV" ]]; then
+  echo "ERROR: cluster csv not found: $CLUSTER_CSV"
+  exit 1
+fi
 
 IFS=',' read -r -a STRATEGY_ARR <<< "$STRATEGIES"
 IFS=',' read -r -a HORIZON_ARR <<< "$HORIZONS"
@@ -125,6 +130,7 @@ run_train_job() {
   echo "[job] start strategy=${strategy} horizon=${horizon} log=${log_file}"
   PYTHONUNBUFFERED=1 "$_PYTHON_BIN" Super_Predict/train_suite_from_horizon.py \
     --metadata_csv "$METADATA_CSV" \
+    --cluster_csv "$CLUSTER_CSV" \
     --s3_bucket "$S3_BUCKET" \
     --s3_region "$AWS_REGION" \
     --fused_manifest_s3_key "$fused_manifest_key" \

@@ -38,6 +38,8 @@ STRATEGIES = ("concat", "sum_pool", "max_pool")
 HORIZONS = (7, 30)
 MODEL_FAMILIES = ("all", "concat_mlp", "gated_fusion_mlp", "ridge", "gbdt")
 LOW_CARD_CATEGORICAL_CANDIDATES = ["channel_country", "default_language", "default_audio_language", "query"]
+LOW_CARD_CATEGORICAL_CANDIDATES += ["cluster_id", "cluster", "fusion_strategy", "k_selected"]
+CLUSTER_FEATURE_COLUMNS = ("cluster_id", "cluster", "fusion_strategy", "k_selected")
 HIGH_CARD_EXCLUDE = {"channel_id", "channel_title"}
 LEAKAGE_COLUMNS = {
     "horizon_view_count",
@@ -243,6 +245,7 @@ def set_global_seed(seed: int) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train 4-model suite for one fusion strategy and horizon")
     parser.add_argument("--metadata_csv", default="Data/raw/Metadata/shorts_metadata_horizon.csv")
+    parser.add_argument("--cluster_csv", default="Unsup_Cluster/cluster_results.csv")
     parser.add_argument("--s3_bucket", default=os.getenv("S3_BUCKET", ""))
     parser.add_argument("--s3_region", default=os.getenv("AWS_REGION", ""))
     parser.add_argument("--fused_manifest_s3_key", required=True)
@@ -297,6 +300,46 @@ def to_numeric_bool(series: pd.Series) -> pd.Series:
     )
 
 
+def load_cluster_frame(cluster_csv: Path) -> pd.DataFrame:
+    cdf = pd.read_csv(cluster_csv, low_memory=False)
+    if "video_id" not in cdf.columns:
+        raise ValueError("cluster CSV must include video_id")
+    if "cluster_id" not in cdf.columns and "cluster" not in cdf.columns:
+        raise ValueError("cluster CSV must include cluster_id or cluster")
+
+    cdf["video_id"] = cdf["video_id"].astype(str)
+    if "cluster_id" in cdf.columns and "cluster" in cdf.columns:
+        cluster_id_num = pd.to_numeric(cdf["cluster_id"], errors="coerce")
+        cluster_num = pd.to_numeric(cdf["cluster"], errors="coerce")
+        cdf["cluster_id"] = cluster_id_num.fillna(cluster_num)
+        cdf["cluster"] = cluster_num.fillna(cluster_id_num)
+    elif "cluster_id" not in cdf.columns and "cluster" in cdf.columns:
+        cdf["cluster_id"] = pd.to_numeric(cdf["cluster"], errors="coerce")
+    elif "cluster" not in cdf.columns and "cluster_id" in cdf.columns:
+        cdf["cluster"] = pd.to_numeric(cdf["cluster_id"], errors="coerce")
+
+    sort_cols: List[str] = []
+    if "cluster_captured_at" in cdf.columns:
+        cdf["_cluster_captured_at_dt"] = pd.to_datetime(cdf["cluster_captured_at"], errors="coerce", utc=True)
+        sort_cols.append("_cluster_captured_at_dt")
+    if "captured_at" in cdf.columns:
+        cdf["_captured_at_dt"] = pd.to_datetime(cdf["captured_at"], errors="coerce", utc=True)
+        sort_cols.append("_captured_at_dt")
+    if "source_hash" in cdf.columns:
+        cdf["_source_hash"] = cdf["source_hash"].astype(str)
+        sort_cols.append("_source_hash")
+    if sort_cols:
+        cdf = cdf.sort_values(sort_cols)
+    cdf = cdf.drop_duplicates(subset=["video_id"], keep="last")
+
+    keep_cols = ["video_id"] + [c for c in CLUSTER_FEATURE_COLUMNS if c in cdf.columns]
+    out = cdf[keep_cols].copy()
+    for col in ("cluster_id", "cluster", "k_selected"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
+    return out
+
+
 def build_metadata_frame(metadata_csv: Path, horizon_days: int) -> pd.DataFrame:
     df = pd.read_csv(metadata_csv, low_memory=False)
     if "horizon_days" not in df.columns or "horizon_view_count" not in df.columns:
@@ -309,6 +352,7 @@ def build_metadata_frame(metadata_csv: Path, horizon_days: int) -> pd.DataFrame:
     if "captured_at" in df.columns:
         df["_captured_at_dt"] = pd.to_datetime(df["captured_at"], errors="coerce", utc=True)
         df = df.sort_values("_captured_at_dt")
+    df["video_id"] = df["video_id"].astype(str)
     df = df.drop_duplicates(subset=["video_id"], keep="last")
 
     if "published_at" in df.columns:
@@ -925,6 +969,15 @@ def main() -> None:
     s3 = S3ArtifactStore(bucket=args.s3_bucket, region=args.s3_region)
 
     metadata_df = build_metadata_frame(Path(args.metadata_csv), args.target_horizon_days)
+    cluster_frame: pd.DataFrame | None = None
+    if str(args.cluster_csv).strip():
+        cluster_csv_path = Path(args.cluster_csv)
+        if not cluster_csv_path.exists():
+            raise FileNotFoundError(f"cluster csv not found: {cluster_csv_path}")
+        cluster_frame = load_cluster_frame(cluster_csv_path)
+        metadata_df = metadata_df.merge(cluster_frame, on="video_id", how="left")
+    else:
+        cluster_csv_path = None
 
     if args.fusion_strategy not in STRATEGIES:
         raise ValueError(f"Unsupported fusion_strategy: {args.fusion_strategy}")
@@ -1296,6 +1349,8 @@ def main() -> None:
             "feature_set_version": "v1_training_suite",
             "numeric_cols": numeric_cols,
             "categorical_cols": categorical_cols,
+            "cluster_csv": str(cluster_csv_path) if cluster_csv_path is not None else "",
+            "cluster_feature_columns": [c for c in CLUSTER_FEATURE_COLUMNS if c in joined.columns],
             "dropped_metadata_cols": dropped_metadata_cols,
             "excluded_high_card": sorted(HIGH_CARD_EXCLUDE),
             "excluded_leakage": sorted(LEAKAGE_COLUMNS),
@@ -1345,6 +1400,15 @@ def main() -> None:
             "metadata_missing_rate": {
                 c: float(joined[c].isna().mean()) for c in (numeric_cols + categorical_cols)
             },
+            "cluster_rows_present": int(joined["cluster_id"].notna().sum()) if "cluster_id" in joined.columns else (
+                int(joined["cluster"].notna().sum()) if "cluster" in joined.columns else 0
+            ),
+            "cluster_rows_missing": int(joined["cluster_id"].isna().sum()) if "cluster_id" in joined.columns else (
+                int(joined["cluster"].isna().sum()) if "cluster" in joined.columns else int(len(joined))
+            ),
+            "cluster_join_rate": float(joined["cluster_id"].notna().mean()) if "cluster_id" in joined.columns else (
+                float(joined["cluster"].notna().mean()) if "cluster" in joined.columns else 0.0
+            ),
             "numeric_feature_stats": numeric_feature_stats,
             "horizon_days": int(args.target_horizon_days),
             "horizon_definition": f"horizon_days == {int(args.target_horizon_days)}",

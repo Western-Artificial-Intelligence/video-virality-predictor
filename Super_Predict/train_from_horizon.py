@@ -43,7 +43,13 @@ FEATURE_WHITELIST = [
     "is_vertical_thumb",
     "published_hour",
     "published_dayofweek",
+    "cluster_id",
+    "cluster",
+    "fusion_strategy",
+    "k_selected",
 ]
+CLUSTER_FEATURE_COLUMNS = ("cluster_id", "cluster", "fusion_strategy", "k_selected")
+CLUSTER_CATEGORICAL_COLUMNS = ("cluster_id", "cluster", "fusion_strategy", "k_selected")
 
 
 def _to_datetime(s: pd.Series) -> pd.Series:
@@ -58,7 +64,52 @@ def _safe_bool_to_int(series: pd.Series) -> pd.Series:
     )
 
 
-def build_training_features(metadata_csv: Path, target_horizon_days: int, target_col: str) -> pd.DataFrame:
+def _load_cluster_frame(cluster_csv: Path) -> pd.DataFrame:
+    cdf = pd.read_csv(cluster_csv, low_memory=False)
+    if "video_id" not in cdf.columns:
+        raise ValueError("cluster CSV is missing required column: video_id")
+    if "cluster_id" not in cdf.columns and "cluster" not in cdf.columns:
+        raise ValueError("cluster CSV must include cluster_id or cluster")
+
+    cdf["video_id"] = cdf["video_id"].astype(str)
+    if "cluster_id" in cdf.columns and "cluster" in cdf.columns:
+        cluster_id_num = pd.to_numeric(cdf["cluster_id"], errors="coerce")
+        cluster_num = pd.to_numeric(cdf["cluster"], errors="coerce")
+        cdf["cluster_id"] = cluster_id_num.fillna(cluster_num)
+        cdf["cluster"] = cluster_num.fillna(cluster_id_num)
+    elif "cluster_id" not in cdf.columns and "cluster" in cdf.columns:
+        cdf["cluster_id"] = pd.to_numeric(cdf["cluster"], errors="coerce")
+    elif "cluster" not in cdf.columns and "cluster_id" in cdf.columns:
+        cdf["cluster"] = pd.to_numeric(cdf["cluster_id"], errors="coerce")
+
+    sort_cols: list[str] = []
+    if "cluster_captured_at" in cdf.columns:
+        cdf["_cluster_captured_at_dt"] = _to_datetime(cdf["cluster_captured_at"])
+        sort_cols.append("_cluster_captured_at_dt")
+    if "captured_at" in cdf.columns:
+        cdf["_captured_at_dt"] = _to_datetime(cdf["captured_at"])
+        sort_cols.append("_captured_at_dt")
+    if "source_hash" in cdf.columns:
+        cdf["_source_hash"] = cdf["source_hash"].astype(str)
+        sort_cols.append("_source_hash")
+    if sort_cols:
+        cdf = cdf.sort_values(sort_cols)
+    cdf = cdf.drop_duplicates(subset=["video_id"], keep="last")
+
+    keep_cols = ["video_id"] + [c for c in CLUSTER_FEATURE_COLUMNS if c in cdf.columns]
+    out = cdf[keep_cols].copy()
+    for col in ("cluster_id", "cluster", "k_selected"):
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
+    return out
+
+
+def build_training_features(
+    metadata_csv: Path,
+    target_horizon_days: int,
+    target_col: str,
+    cluster_csv: Path | None = None,
+) -> pd.DataFrame:
     df = pd.read_csv(metadata_csv)
     if "horizon_days" not in df.columns or "horizon_view_count" not in df.columns:
         raise ValueError("metadata CSV is missing horizon label columns")
@@ -88,6 +139,11 @@ def build_training_features(metadata_csv: Path, target_horizon_days: int, target
 
     target = pd.to_numeric(df["horizon_view_count"], errors="coerce").fillna(0).clip(lower=0)
     df[target_col] = target.map(lambda x: float(math.log1p(x)))
+
+    if cluster_csv is not None:
+        cluster_df = _load_cluster_frame(cluster_csv)
+        df["video_id"] = df["video_id"].astype(str)
+        df = df.merge(cluster_df, on="video_id", how="left")
 
     keep_cols = ["video_id", target_col] + [c for c in FEATURE_WHITELIST if c in df.columns]
     out = df[keep_cols].copy()
@@ -160,6 +216,7 @@ def main() -> None:
     parser.add_argument("--model_out_prefix", default="clipfarm/models/virality/latest")
     parser.add_argument("--target_horizon_days", type=int, default=7)
     parser.add_argument("--fusion_strategy", default="", help="Optional fusion strategy label for reporting")
+    parser.add_argument("--cluster_csv", default="Unsup_Cluster/cluster_results.csv")
     args = parser.parse_args()
 
     s3 = S3ArtifactStore(bucket=args.s3_bucket, region=args.s3_region)
@@ -183,7 +240,18 @@ def main() -> None:
         if fused_manifest.empty:
             raise ValueError("Fused manifest is empty")
 
-        features = build_training_features(Path(args.metadata_csv), args.target_horizon_days, target_col=target_col)
+        cluster_csv_path: Path | None = None
+        if str(args.cluster_csv).strip():
+            cluster_csv_path = Path(args.cluster_csv)
+            if not cluster_csv_path.exists():
+                raise FileNotFoundError(f"cluster csv not found: {cluster_csv_path}")
+
+        features = build_training_features(
+            Path(args.metadata_csv),
+            args.target_horizon_days,
+            target_col=target_col,
+            cluster_csv=cluster_csv_path,
+        )
         features = features[features["video_id"].astype(str).isin(fused_manifest["video_id"].astype(str))].copy()
         if features.empty:
             raise ValueError("No training rows after joining with fused manifest")
@@ -198,7 +266,11 @@ def main() -> None:
 
         cfg = ViralityConfig(
             target_col=target_col,
-            categorical_cols=[c for c in ("channel_country", "default_language", "default_audio_language") if c in features.columns],
+            categorical_cols=[
+                c
+                for c in ("channel_country", "default_language", "default_audio_language", *CLUSTER_CATEGORICAL_COLUMNS)
+                if c in features.columns
+            ],
         )
         out = train_virality_model(
             fused_pt_path=str(local_fused_pt),
@@ -213,6 +285,16 @@ def main() -> None:
         metrics_payload["target_horizon_days"] = int(args.target_horizon_days)
         metrics_payload["target_col"] = target_col
         metrics_payload["train_rows_after_join"] = int(len(features))
+        metrics_payload["cluster_feature_columns"] = [c for c in CLUSTER_FEATURE_COLUMNS if c in features.columns]
+        if "cluster_id" in features.columns:
+            metrics_payload["cluster_rows_present"] = int(features["cluster_id"].notna().sum())
+            metrics_payload["cluster_rows_missing"] = int(features["cluster_id"].isna().sum())
+        elif "cluster" in features.columns:
+            metrics_payload["cluster_rows_present"] = int(features["cluster"].notna().sum())
+            metrics_payload["cluster_rows_missing"] = int(features["cluster"].isna().sum())
+        else:
+            metrics_payload["cluster_rows_present"] = 0
+            metrics_payload["cluster_rows_missing"] = int(len(features))
         if args.fusion_strategy:
             metrics_payload["fusion_strategy"] = args.fusion_strategy
         local_metrics.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
@@ -231,6 +313,8 @@ def main() -> None:
             "test_count": len(out["test_ids"]),
             "reconstructed_vectors_count": reconstructed_count,
             "downloaded_shards_count": downloaded_shards,
+            "cluster_csv": str(cluster_csv_path) if cluster_csv_path is not None else "",
+            "cluster_feature_columns": [c for c in CLUSTER_FEATURE_COLUMNS if c in features.columns],
         }
         if args.fusion_strategy:
             train_manifest_payload["fusion_strategy"] = args.fusion_strategy
@@ -245,6 +329,12 @@ def main() -> None:
         print(f"target_horizon_days: {args.target_horizon_days}")
         print(f"target_col: {target_col}")
         print(f"train_rows_after_join: {len(features)}")
+        if "cluster_id" in features.columns:
+            print(f"cluster_rows_present: {int(features['cluster_id'].notna().sum())}")
+            print(f"cluster_rows_missing: {int(features['cluster_id'].isna().sum())}")
+        elif "cluster" in features.columns:
+            print(f"cluster_rows_present: {int(features['cluster'].notna().sum())}")
+            print(f"cluster_rows_missing: {int(features['cluster'].isna().sum())}")
         print(f"reconstructed_vectors_count: {reconstructed_count}")
         print(f"downloaded_shards_count: {downloaded_shards}")
         print(f"model_s3_key: {args.model_out_prefix.strip('/')}/model.joblib")

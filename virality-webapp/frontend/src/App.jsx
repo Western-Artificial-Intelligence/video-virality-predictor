@@ -179,6 +179,17 @@ function metadataConfidenceLabel(fields, metadata) {
   return 'low';
 }
 
+function confidenceToProgress(confidence) {
+  const table = {
+    low: 24,
+    'medium-low': 42,
+    medium: 58,
+    'medium-high': 74,
+    high: 90
+  };
+  return table[String(confidence || '').toLowerCase()] || 0;
+}
+
 function FieldInput({ field, value, onChange, compact = false, className = '' }) {
   const id = `field-${field.name}`;
   const label = prettyFieldLabel(field.name);
@@ -580,13 +591,14 @@ export default function App() {
 
   const prediction7 = useMemo(() => {
     if (!result) return null;
+    const progressFromConfidence = confidenceToProgress(metadataConfidence);
     if (result.mode === 'fast') {
       return {
         raw: parseNumber(result.predictions_7d?.prediction_raw),
         minRaw: null,
         maxRaw: null,
         confidence: metadataConfidence,
-        progress: 68
+        progress: progressFromConfidence
       };
     }
 
@@ -598,19 +610,20 @@ export default function App() {
       minRaw,
       maxRaw,
       confidence: metadataConfidence,
-      progress: 70
+      progress: progressFromConfidence
     };
   }, [result, metadataConfidence]);
 
   const prediction30 = useMemo(() => {
     if (!result) return null;
+    const progressFromConfidence = confidenceToProgress(metadataConfidence);
     if (result.mode === 'fast') {
       return {
         raw: parseNumber(result.predictions_30d?.prediction_raw),
         minRaw: null,
         maxRaw: null,
         confidence: metadataConfidence,
-        progress: 78
+        progress: progressFromConfidence
       };
     }
 
@@ -622,7 +635,7 @@ export default function App() {
       minRaw,
       maxRaw,
       confidence: metadataConfidence,
-      progress: 81
+      progress: progressFromConfidence
     };
   }, [result, metadataConfidence]);
 

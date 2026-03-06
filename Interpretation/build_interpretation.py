@@ -198,8 +198,15 @@ def build_interpretation_rows(
     fps_sample: int,
     diff_thresh: float,
     edge_thresh: float,
+    checkpoint_csv: Optional[Path] = None,
+    checkpoint_every: int = 25,
 ) -> tuple[list[dict], dict[str, int]]:
     rows: list[dict] = []
+    checkpoint_buffer: list[dict] = []
+    checkpoint_every = max(1, int(checkpoint_every))
+    checkpoint_has_header = bool(
+        checkpoint_csv is not None and checkpoint_csv.exists() and checkpoint_csv.stat().st_size > 0
+    )
 
     stats = {
         "video_downloaded": 0,
@@ -260,7 +267,7 @@ def build_interpretation_rows(
         if audio_available and audio["audio_rms_mean"] == 0.0 and audio["audio_rms_std"] == 0.0:
             stats["audio_decode_failures"] += 1
 
-        density = visual_density(video_path=video_path, fps_sample=1, edge_thresh=edge_thresh)
+        density = visual_density(video_path=video_path, fps_sample=max(1, int(fps_sample)), edge_thresh=edge_thresh)
 
         out_row = {
             "video_id": video_id,
@@ -280,6 +287,27 @@ def build_interpretation_rows(
             "visual_density": float(density),
         }
         rows.append(out_row)
+        checkpoint_buffer.append(out_row)
+
+        if checkpoint_csv is not None and len(checkpoint_buffer) >= checkpoint_every:
+            pd.DataFrame(checkpoint_buffer).to_csv(
+                checkpoint_csv,
+                mode="a",
+                index=False,
+                quoting=csv.QUOTE_MINIMAL,
+                header=not checkpoint_has_header,
+            )
+            checkpoint_has_header = True
+            checkpoint_buffer.clear()
+
+    if checkpoint_csv is not None and checkpoint_buffer:
+        pd.DataFrame(checkpoint_buffer).to_csv(
+            checkpoint_csv,
+            mode="a",
+            index=False,
+            quoting=csv.QUOTE_MINIMAL,
+            header=not checkpoint_has_header,
+        )
 
     return rows, stats
 
@@ -297,6 +325,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--s3_region", default=os.getenv("AWS_REGION", ""))
     parser.add_argument("--raw_prefix", default="clipfarm/raw")
     parser.add_argument("--fetch_missing", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--checkpoint_every", type=int, default=25)
 
     parser.add_argument("--fps_sample", type=int, default=2)
     parser.add_argument("--diff_thresh", type=float, default=25.0)
@@ -323,11 +353,34 @@ def main() -> None:
     missing = sorted(required - set(clusters.columns))
     if missing:
         raise ValueError(f"Missing required columns in {cluster_csv}: {missing}")
+    clusters["video_id"] = clusters["video_id"].astype(str)
 
     video_dir.mkdir(parents=True, exist_ok=True)
     audio_dir.mkdir(parents=True, exist_ok=True)
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
 
     video_id_to_url = build_video_url_map(metadata_csv)
+
+    existing_df = pd.DataFrame()
+    if bool(args.resume) and output_csv.exists():
+        try:
+            existing_df = pd.read_csv(output_csv, low_memory=False)
+            if "video_id" in existing_df.columns:
+                existing_df["video_id"] = existing_df["video_id"].astype(str)
+                existing_df = existing_df.drop_duplicates(subset=["video_id"], keep="last")
+                done_ids = set(existing_df["video_id"].tolist())
+                before_n = int(len(clusters))
+                clusters = clusters[~clusters["video_id"].isin(done_ids)].copy()
+                print(
+                    f"[interpret] resume enabled: skipping {before_n - len(clusters)} already-computed rows",
+                    flush=True,
+                )
+            else:
+                existing_df = pd.DataFrame()
+        except Exception:
+            existing_df = pd.DataFrame()
+    elif output_csv.exists():
+        output_csv.unlink()
 
     s3: Optional[S3ArtifactStore] = None
     if bool(args.fetch_missing):
@@ -347,13 +400,22 @@ def main() -> None:
         fps_sample=int(args.fps_sample),
         diff_thresh=float(args.diff_thresh),
         edge_thresh=float(args.edge_thresh),
+        checkpoint_csv=output_csv,
+        checkpoint_every=int(args.checkpoint_every),
     )
 
-    out_df = pd.DataFrame(rows)
+    if existing_df.empty:
+        out_df = pd.DataFrame(rows)
+    elif rows:
+        out_df = pd.concat([existing_df, pd.DataFrame(rows)], ignore_index=True)
+    else:
+        out_df = existing_df.copy()
+
     if not out_df.empty:
+        out_df["video_id"] = out_df["video_id"].astype(str)
+        out_df = out_df.drop_duplicates(subset=["video_id"], keep="last")
         out_df = out_df.sort_values(by=["cluster", "video_id"]).reset_index(drop=True)
 
-    output_csv.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_csv(output_csv, index=False, quoting=csv.QUOTE_MINIMAL)
 
     print("interpretation summary")

@@ -48,6 +48,8 @@ FETCH_MISSING_MEDIA="${FETCH_MISSING_MEDIA:-1}"
 FPS_SAMPLE="${FPS_SAMPLE:-2}"
 DIFF_THRESH="${DIFF_THRESH:-25}"
 EDGE_THRESH="${EDGE_THRESH:-20}"
+INTERPRET_RESUME="${INTERPRET_RESUME:-1}"
+INTERPRET_CHECKPOINT_EVERY="${INTERPRET_CHECKPOINT_EVERY:-25}"
 
 OUTPUT_CLUSTER_CSV="${OUTPUT_CLUSTER_CSV:-Unsup_Cluster/cluster_results.csv}"
 OUTPUT_DIAGNOSTICS_JSON="${OUTPUT_DIAGNOSTICS_JSON:-Unsup_Cluster/cluster_diagnostics.json}"
@@ -114,6 +116,12 @@ if [[ -z "$FETCH_MISSING_FLAG" ]]; then
   exit 1
 fi
 
+INTERPRET_RESUME_FLAG="$(to_bool_flag "$INTERPRET_RESUME" "--resume" "--no-resume")"
+if [[ -z "$INTERPRET_RESUME_FLAG" ]]; then
+  echo "ERROR: INTERPRET_RESUME must be boolean-like (1/0/true/false/yes/no), got: $INTERPRET_RESUME"
+  exit 1
+fi
+
 echo "[cluster] starting"
 PYTHONUNBUFFERED=1 "$_PYTHON_BIN" Unsup_Cluster/cluster.py \
   --metadata_csv "$METADATA_CSV" \
@@ -151,6 +159,8 @@ PYTHONUNBUFFERED=1 "$_PYTHON_BIN" Interpretation/build_interpretation.py \
   --s3_region "$AWS_REGION" \
   --raw_prefix "$RAW_PREFIX" \
   "$FETCH_MISSING_FLAG" \
+  "$INTERPRET_RESUME_FLAG" \
+  --checkpoint_every "$INTERPRET_CHECKPOINT_EVERY" \
   --fps_sample "$FPS_SAMPLE" \
   --diff_thresh "$DIFF_THRESH" \
   --edge_thresh "$EDGE_THRESH"

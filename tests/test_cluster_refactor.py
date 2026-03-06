@@ -153,6 +153,7 @@ class ClusterRefactorTests(unittest.TestCase):
             k_values=[2, 3, 4, 5],
             random_seeds=[11, 23, 37],
             min_cluster_fraction=0.01,
+            max_silhouette_samples=0,
         )
         best = max(candidates, key=_candidate_sort_key)
         self.assertEqual(int(best["k"]), 3)
@@ -232,6 +233,7 @@ class ClusterRefactorTests(unittest.TestCase):
                 umap_cluster_dim=15,
                 umap_viz_neighbors=15,
                 min_cluster_fraction=0.01,
+                max_silhouette_samples=0,
                 output_csv=out_csv,
                 diagnostics_json=diag_json,
                 embeddings_dir=emb_dir,

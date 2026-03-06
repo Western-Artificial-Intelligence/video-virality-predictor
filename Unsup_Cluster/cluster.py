@@ -10,6 +10,7 @@ This script implements Dev1/2 outputs:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import tempfile
@@ -145,53 +146,53 @@ def _load_vectors_from_manifest(
     manifest_df: pd.DataFrame,
     tmp_dir: Path,
 ) -> tuple[list[str], np.ndarray]:
-    shard_cache: dict[str, np.lib.npyio.NpzFile] = {}
-    local_cache_paths: dict[str, Path] = {}
+    if manifest_df.empty:
+        raise ValueError("Manifest frame is empty")
 
-    vectors: list[np.ndarray] = []
-    video_ids: list[str] = []
+    # Preserve canonical manifest order for output alignment, while processing
+    # one shard at a time to keep memory bounded.
+    ordered = manifest_df.reset_index(drop=True).copy()
+    ordered["row_idx"] = np.arange(len(ordered), dtype=np.int64)
+    scan = ordered.sort_values(["fused_key", "shard_idx", "row_idx"]).reset_index(drop=True)
 
-    for row in manifest_df.itertuples(index=False):
-        video_id = str(getattr(row, "video_id"))
-        fused_key = str(getattr(row, "fused_key"))
-        shard_idx = int(getattr(row, "shard_idx"))
+    video_ids = ordered["video_id"].astype(str).tolist()
+    vectors: list[Optional[np.ndarray]] = [None] * len(ordered)
 
-        if fused_key not in shard_cache:
-            local = tmp_dir / Path(fused_key).name
-            s3.download_file(fused_key, local)
-            shard_cache[fused_key] = np.load(local, allow_pickle=True)
-            local_cache_paths[fused_key] = local
+    for fused_key, group in scan.groupby("fused_key", sort=False):
+        key = str(fused_key)
+        local = tmp_dir / Path(key).name
+        s3.download_file(key, local)
 
-        payload = shard_cache[fused_key]
-        if "vectors" not in payload:
-            raise ValueError(f"Shard missing 'vectors' array: {fused_key}")
-        arr = np.asarray(payload["vectors"], dtype=np.float32)
+        try:
+            with np.load(local, allow_pickle=True) as payload:
+                if "vectors" not in payload:
+                    raise ValueError(f"Shard missing 'vectors' array: {key}")
+                arr = np.asarray(payload["vectors"], dtype=np.float32)
+        finally:
+            if local.exists():
+                local.unlink()
 
         if arr.ndim != 2:
-            raise ValueError(f"Shard vectors must be 2D, got {arr.shape} for {fused_key}")
-        if shard_idx < 0 or shard_idx >= arr.shape[0]:
-            raise IndexError(
-                f"shard_idx out of range for {video_id}: idx={shard_idx} rows={arr.shape[0]} key={fused_key}"
-            )
+            raise ValueError(f"Shard vectors must be 2D, got {arr.shape} for {key}")
 
-        vectors.append(arr[shard_idx])
-        video_ids.append(video_id)
+        for row in group.itertuples(index=False):
+            out_idx = int(getattr(row, "row_idx"))
+            shard_idx = int(getattr(row, "shard_idx"))
+            video_id = str(getattr(row, "video_id"))
 
-    if not vectors:
-        raise ValueError("No vectors loaded from manifest")
+            if shard_idx < 0 or shard_idx >= arr.shape[0]:
+                raise IndexError(
+                    f"shard_idx out of range for {video_id}: idx={shard_idx} rows={arr.shape[0]} key={key}"
+                )
+            vectors[out_idx] = np.asarray(arr[shard_idx], dtype=np.float32).copy()
 
-    stacked = np.stack(vectors).astype(np.float32)
+        del arr
+        gc.collect()
 
-    # Ensure file handles are released.
-    for obj in shard_cache.values():
-        try:
-            obj.close()
-        except Exception:
-            pass
-    for local in local_cache_paths.values():
-        if local.exists():
-            local.unlink()
+    if any(v is None for v in vectors):
+        raise ValueError("Failed to reconstruct some vectors from manifest shards")
 
+    stacked = np.stack([v for v in vectors if v is not None]).astype(np.float32, copy=False)
     return video_ids, stacked
 
 
@@ -328,10 +329,12 @@ def _evaluate_strategy_candidates(
     k_values: Iterable[int],
     random_seeds: Sequence[int],
     min_cluster_fraction: float,
+    max_silhouette_samples: int,
 ) -> list[dict]:
     x = reduced.cluster_matrix
     n = x.shape[0]
     candidates: list[dict] = []
+    sample_size_cap = int(max_silhouette_samples)
 
     for k in k_values:
         if k < 2 or k >= n:
@@ -349,7 +352,20 @@ def _evaluate_strategy_candidates(
             if len(np.unique(labels)) < 2:
                 silhouettes.append(-1.0)
             else:
-                silhouettes.append(float(silhouette_score(x, labels, metric="euclidean")))
+                if sample_size_cap > 0 and n > sample_size_cap:
+                    silhouettes.append(
+                        float(
+                            silhouette_score(
+                                x,
+                                labels,
+                                metric="euclidean",
+                                sample_size=sample_size_cap,
+                                random_state=int(seed),
+                            )
+                        )
+                    )
+                else:
+                    silhouettes.append(float(silhouette_score(x, labels, metric="euclidean")))
 
         silhouette_mean = float(np.mean(silhouettes)) if silhouettes else -1.0
         stability = _stability_score(labels_collection)
@@ -510,19 +526,22 @@ def run_clustering(
     umap_cluster_dim: int,
     umap_viz_neighbors: int,
     min_cluster_fraction: float,
+    max_silhouette_samples: int,
     output_csv: Path,
     diagnostics_json: Path,
     embeddings_dir: Path,
     plots_dir: Path,
 ) -> dict:
-    datasets: dict[str, StrategyDataset] = {}
-    reduced_spaces: dict[str, ReducedSpace] = {}
+    strategy_summaries: list[dict] = []
+    best: Optional[dict] = None
+    best_reduced: Optional[ReducedSpace] = None
     candidates: list[dict] = []
 
     with tempfile.TemporaryDirectory(prefix="cluster_refactor_") as tmp:
         tmp_dir = Path(tmp)
 
         for strategy in strategies:
+            print(f"[cluster] loading strategy={strategy}", flush=True)
             ds = _load_strategy_dataset(
                 s3=s3,
                 strategy=strategy,
@@ -531,7 +550,19 @@ def run_clustering(
                 metadata_video_ids=metadata_video_ids,
                 tmp_dir=tmp_dir,
             )
-            datasets[strategy] = ds
+            print(
+                f"[cluster] loaded strategy={strategy} rows={len(ds.video_ids)} dim={ds.vectors.shape[1]}",
+                flush=True,
+            )
+            strategy_summaries.append(
+                {
+                    "strategy": strategy,
+                    "manifest_rows_raw": int(ds.manifest_rows_raw),
+                    "manifest_rows_filtered": int(ds.manifest_rows_filtered),
+                    "cluster_rows": int(len(ds.video_ids)),
+                    "vector_dim": int(ds.vectors.shape[1]),
+                }
+            )
 
             reduced = _build_reduced_space(
                 dataset=ds,
@@ -540,23 +571,55 @@ def run_clustering(
                 umap_cluster_dim=umap_cluster_dim,
                 umap_viz_neighbors=umap_viz_neighbors,
             )
-            reduced_spaces[strategy] = reduced
+            print(
+                f"[cluster] reduced strategy={strategy} space={reduced.cluster_space_name} "
+                f"shape={list(reduced.cluster_matrix.shape)}",
+                flush=True,
+            )
 
             strategy_candidates = _evaluate_strategy_candidates(
                 reduced=reduced,
                 k_values=k_values,
                 random_seeds=random_seeds,
                 min_cluster_fraction=min_cluster_fraction,
+                max_silhouette_samples=max_silhouette_samples,
             )
+            print(
+                f"[cluster] evaluated strategy={strategy} candidates={len(strategy_candidates)}",
+                flush=True,
+            )
+            if not strategy_candidates:
+                print(f"[cluster] no valid candidates for strategy={strategy}", flush=True)
+                del ds
+                del reduced
+                gc.collect()
+                continue
+
             candidates.extend(strategy_candidates)
+
+            strategy_best = max(strategy_candidates, key=_candidate_sort_key)
+            if best is None or _candidate_sort_key(strategy_best) > _candidate_sort_key(best):
+                best = strategy_best
+                best_reduced = reduced
+                print(
+                    f"[cluster] current best strategy={strategy} k={int(strategy_best['k'])} "
+                    f"composite={float(strategy_best['composite']):.4f}",
+                    flush=True,
+                )
+            else:
+                del reduced
+
+            del ds
+            gc.collect()
 
     if not candidates:
         raise ValueError("No valid clustering candidates were produced")
+    if best is None or best_reduced is None:
+        raise ValueError("No best strategy could be selected from candidates")
 
-    best = max(candidates, key=_candidate_sort_key)
     best_strategy = str(best["strategy"])
     best_k = int(best["k"])
-    reduced = reduced_spaces[best_strategy]
+    reduced = best_reduced
 
     final_model = KMeans(n_clusters=best_k, random_state=int(random_seeds[0]), n_init=50)
     final_labels = final_model.fit_predict(reduced.cluster_matrix)
@@ -592,18 +655,11 @@ def run_clustering(
             "cluster_space": reduced.cluster_space_name,
             "candidate_metrics": best,
         },
-        "strategies": [
-            {
-                "strategy": name,
-                "manifest_rows_raw": int(datasets[name].manifest_rows_raw),
-                "manifest_rows_filtered": int(datasets[name].manifest_rows_filtered),
-                "cluster_rows": int(len(datasets[name].video_ids)),
-                "vector_dim": int(datasets[name].vectors.shape[1]),
-            }
-            for name in strategies
-            if name in datasets
-        ],
+        "strategies": strategy_summaries,
         "candidates": candidates,
+        "scoring": {
+            "max_silhouette_samples": int(max_silhouette_samples),
+        },
         "artifacts": {
             "cluster_results_csv": str(output_csv),
             "latent_embeddings_dir": str(embeddings_dir),
@@ -644,6 +700,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--k_max", type=int, default=16)
     parser.add_argument("--random_seeds", default=",".join(str(x) for x in DEFAULT_RANDOM_SEEDS))
     parser.add_argument("--min_cluster_fraction", type=float, default=0.01)
+    parser.add_argument(
+        "--max_silhouette_samples",
+        type=int,
+        default=4000,
+        help="Max sample size for silhouette scoring per candidate (<=0 means full dataset).",
+    )
 
     parser.add_argument("--enable_umap_cluster", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--umap_cluster_dim", type=int, default=15)
@@ -693,6 +755,7 @@ def main() -> None:
         umap_cluster_dim=int(args.umap_cluster_dim),
         umap_viz_neighbors=int(args.umap_viz_neighbors),
         min_cluster_fraction=float(args.min_cluster_fraction),
+        max_silhouette_samples=int(args.max_silhouette_samples),
         output_csv=Path(args.output_csv),
         diagnostics_json=Path(args.diagnostics_json),
         embeddings_dir=Path(args.embeddings_dir),

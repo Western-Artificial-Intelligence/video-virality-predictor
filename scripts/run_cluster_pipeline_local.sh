@@ -39,7 +39,8 @@ K_MIN="${K_MIN:-6}"
 K_MAX="${K_MAX:-16}"
 RANDOM_SEEDS="${RANDOM_SEEDS:-13,23,37,53,71}"
 MIN_CLUSTER_FRACTION="${MIN_CLUSTER_FRACTION:-0.01}"
-ENABLE_UMAP_CLUSTER="${ENABLE_UMAP_CLUSTER:-1}"
+MAX_SILHOUETTE_SAMPLES="${MAX_SILHOUETTE_SAMPLES:-2000}"
+ENABLE_UMAP_CLUSTER="${ENABLE_UMAP_CLUSTER:-0}"
 UMAP_CLUSTER_DIM="${UMAP_CLUSTER_DIM:-15}"
 UMAP_VIZ_NEIGHBORS="${UMAP_VIZ_NEIGHBORS:-15}"
 
@@ -81,6 +82,38 @@ if [[ ! -f "$METADATA_CSV" ]]; then
   exit 1
 fi
 
+to_bool_flag() {
+  local raw="$1"
+  local positive_flag="$2"
+  local negative_flag="$3"
+  local normalized
+  normalized="$(echo "$raw" | tr '[:upper:]' '[:lower:]' | xargs)"
+
+  case "$normalized" in
+    1|true|yes|y|on)
+      echo "$positive_flag"
+      ;;
+    0|false|no|n|off)
+      echo "$negative_flag"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+UMAP_CLUSTER_FLAG="$(to_bool_flag "$ENABLE_UMAP_CLUSTER" "--enable_umap_cluster" "--no-enable_umap_cluster")"
+if [[ -z "$UMAP_CLUSTER_FLAG" ]]; then
+  echo "ERROR: ENABLE_UMAP_CLUSTER must be boolean-like (1/0/true/false/yes/no), got: $ENABLE_UMAP_CLUSTER"
+  exit 1
+fi
+
+FETCH_MISSING_FLAG="$(to_bool_flag "$FETCH_MISSING_MEDIA" "--fetch_missing" "--no-fetch_missing")"
+if [[ -z "$FETCH_MISSING_FLAG" ]]; then
+  echo "ERROR: FETCH_MISSING_MEDIA must be boolean-like (1/0/true/false/yes/no), got: $FETCH_MISSING_MEDIA"
+  exit 1
+fi
+
 echo "[cluster] starting"
 PYTHONUNBUFFERED=1 "$_PYTHON_BIN" Unsup_Cluster/cluster.py \
   --metadata_csv "$METADATA_CSV" \
@@ -94,7 +127,8 @@ PYTHONUNBUFFERED=1 "$_PYTHON_BIN" Unsup_Cluster/cluster.py \
   --k_max "$K_MAX" \
   --random_seeds "$RANDOM_SEEDS" \
   --min_cluster_fraction "$MIN_CLUSTER_FRACTION" \
-  --enable_umap_cluster "$ENABLE_UMAP_CLUSTER" \
+  --max_silhouette_samples "$MAX_SILHOUETTE_SAMPLES" \
+  "$UMAP_CLUSTER_FLAG" \
   --umap_cluster_dim "$UMAP_CLUSTER_DIM" \
   --umap_viz_neighbors "$UMAP_VIZ_NEIGHBORS" \
   --output_csv "$OUTPUT_CLUSTER_CSV" \
@@ -116,7 +150,7 @@ PYTHONUNBUFFERED=1 "$_PYTHON_BIN" Interpretation/build_interpretation.py \
   --s3_bucket "$S3_BUCKET" \
   --s3_region "$AWS_REGION" \
   --raw_prefix "$RAW_PREFIX" \
-  --fetch_missing "$FETCH_MISSING_MEDIA" \
+  "$FETCH_MISSING_FLAG" \
   --fps_sample "$FPS_SAMPLE" \
   --diff_thresh "$DIFF_THRESH" \
   --edge_thresh "$EDGE_THRESH"

@@ -1,0 +1,382 @@
+{
+  "0": {
+    "cluster_id": 0,
+    "generation_approach": "motion-focused",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 361,
+        "motion_range": "14.13 - 51.67",
+        "pacing": "medium",
+        "cuts_per_minute": 75,
+        "cut_rate_range": "18 - 111"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.158",
+        "audio_rms_std": "0.100"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 22,
+      "variation_strategy": "vary_motion_parameters"
+    },
+    "generation_hints": {
+      "note": "Emphasize camera movement and subject motion. Trend tokens can guide motion style variations."
+    }
+  },
+  "1": {
+    "cluster_id": 1,
+    "generation_approach": "text-driven",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 265,
+        "motion_range": "0.00 - 54.04",
+        "pacing": "slow",
+        "cuts_per_minute": 49,
+        "cut_rate_range": "0 - 105"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.143",
+        "audio_rms_std": "0.081"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 34,
+      "variation_strategy": "vary_text_prompt"
+    },
+    "generation_hints": {
+      "note": "Focus on thematic and conceptual elements. Trend tokens add current flavor to base themes."
+    }
+  },
+  "2": {
+    "cluster_id": 2,
+    "generation_approach": "motion-focused",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 323,
+        "motion_range": "15.93 - 44.67",
+        "pacing": "medium",
+        "cuts_per_minute": 67,
+        "cut_rate_range": "5 - 110"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.134",
+        "audio_rms_std": "0.081"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 11,
+      "variation_strategy": "vary_motion_parameters"
+    },
+    "generation_hints": {
+      "note": "Emphasize camera movement and subject motion. Trend tokens can guide motion style variations."
+    }
+  },
+  "3": {
+    "cluster_id": 3,
+    "generation_approach": "motion-focused",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 342,
+        "motion_range": "10.11 - 54.67",
+        "pacing": "medium",
+        "cuts_per_minute": 68,
+        "cut_rate_range": "0 - 114"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.081",
+        "audio_rms_std": "0.060"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 17,
+      "variation_strategy": "vary_motion_parameters"
+    },
+    "generation_hints": {
+      "note": "Emphasize camera movement and subject motion. Trend tokens can guide motion style variations."
+    }
+  },
+  "4": {
+    "cluster_id": 4,
+    "generation_approach": "text-driven",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 252,
+        "motion_range": "7.32 - 44.95",
+        "pacing": "slow",
+        "cuts_per_minute": 50,
+        "cut_rate_range": "0 - 119"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.131",
+        "audio_rms_std": "0.072"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 32,
+      "variation_strategy": "vary_text_prompt"
+    },
+    "generation_hints": {
+      "note": "Focus on thematic and conceptual elements. Trend tokens add current flavor to base themes."
+    }
+  },
+  "5": {
+    "cluster_id": 5,
+    "generation_approach": "text-driven",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 199,
+        "motion_range": "6.92 - 35.19",
+        "pacing": "slow",
+        "cuts_per_minute": 36,
+        "cut_rate_range": "0 - 95"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.147",
+        "audio_rms_std": "0.075"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 9,
+      "variation_strategy": "vary_text_prompt"
+    },
+    "generation_hints": {
+      "note": "Focus on thematic and conceptual elements. Trend tokens add current flavor to base themes."
+    }
+  },
+  "6": {
+    "cluster_id": 6,
+    "generation_approach": "motion-focused",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 331,
+        "motion_range": "5.07 - 56.37",
+        "pacing": "medium",
+        "cuts_per_minute": 69,
+        "cut_rate_range": "0 - 117"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.153",
+        "audio_rms_std": "0.087"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 27,
+      "variation_strategy": "vary_motion_parameters"
+    },
+    "generation_hints": {
+      "note": "Emphasize camera movement and subject motion. Trend tokens can guide motion style variations."
+    }
+  },
+  "7": {
+    "cluster_id": 7,
+    "generation_approach": "text-driven",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 309,
+        "motion_range": "6.90 - 77.28",
+        "pacing": "slow",
+        "cuts_per_minute": 58,
+        "cut_rate_range": "0 - 114"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.103",
+        "audio_rms_std": "0.077"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 15,
+      "variation_strategy": "vary_text_prompt"
+    },
+    "generation_hints": {
+      "note": "Focus on thematic and conceptual elements. Trend tokens add current flavor to base themes."
+    }
+  },
+  "8": {
+    "cluster_id": 8,
+    "generation_approach": "image-conditioned",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 257,
+        "motion_range": "8.04 - 46.99",
+        "pacing": "slow",
+        "cuts_per_minute": 49,
+        "cut_rate_range": "0 - 108"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.164",
+        "audio_rms_std": "0.105"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 28,
+      "variation_strategy": "vary_seed_image"
+    },
+    "generation_hints": {
+      "note": "Use representative frames from cluster as seed images. Apply trend tokens to text conditioning."
+    }
+  },
+  "9": {
+    "cluster_id": 9,
+    "generation_approach": "image-conditioned",
+    "base_prompt_components": {
+      "visual_style": {
+        "visual_complexity": "low",
+        "detail_level": "simplified",
+        "consistency": "within_cluster_variance"
+      },
+      "motion_profile": {
+        "camera_movement": "dynamic",
+        "motion_intensity": 249,
+        "motion_range": "9.10 - 40.47",
+        "pacing": "slow",
+        "cuts_per_minute": 46,
+        "cut_rate_range": "6 - 106"
+      },
+      "audio_profile": {
+        "volume_level": "low",
+        "dynamic_range": "low",
+        "audio_rms_mean": "0.116",
+        "audio_rms_std": "0.092"
+      }
+    },
+    "trend_tokens": {
+      "enabled": false,
+      "tokens": [],
+      "usage_note": "Optional 1-3 word modifiers appended to base prompt to reflect current trends within cluster",
+      "application_strategy": "Randomly select 0-2 tokens per generation for variance"
+    },
+    "constraints": {
+      "sample_count": 27,
+      "variation_strategy": "vary_seed_image"
+    },
+    "generation_hints": {
+      "note": "Use representative frames from cluster as seed images. Apply trend tokens to text conditioning."
+    }
+  }
+}

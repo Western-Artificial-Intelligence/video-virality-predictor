@@ -1,9 +1,6 @@
 name: Horizon Collector
 
 on:
-  schedule:
-    # Run 4 times/day (every 6 hours) at minute 30 UTC.
-    - cron: "30 */6 * * *"
   workflow_dispatch:
 
 permissions:

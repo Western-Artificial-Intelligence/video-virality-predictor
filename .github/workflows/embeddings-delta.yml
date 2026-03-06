@@ -1,9 +1,6 @@
 name: Embeddings Delta
 
 on:
-  workflow_run:
-    workflows: ["Raw Data Async Sync"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       max_items:
@@ -26,7 +23,6 @@ env:
 
 jobs:
   embed_video:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +61,6 @@ jobs:
             --max_items "$MAX_ITEMS"
 
   embed_audio:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +99,6 @@ jobs:
             --max_items "$MAX_ITEMS"
 
   embed_text:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

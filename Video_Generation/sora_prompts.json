@@ -1,0 +1,322 @@
+{
+  "cluster_0": [
+    {
+      "cluster_id": 0,
+      "prompt": "a tech product review and demonstration. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "tech",
+      "metrics": {
+        "motion": 361,
+        "cuts_per_min": 75,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 0,
+      "prompt": "a tech product review and demonstration. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "tech",
+      "metrics": {
+        "motion": 361,
+        "cuts_per_min": 75,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 0,
+      "prompt": "a tech product review and demonstration. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "tech",
+      "metrics": {
+        "motion": 361,
+        "cuts_per_min": 75,
+        "approach": "motion-focused"
+      }
+    }
+  ],
+  "cluster_1": [
+    {
+      "cluster_id": 1,
+      "prompt": "exciting gameplay footage. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "gaming",
+      "metrics": {
+        "motion": 265,
+        "cuts_per_min": 49,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 1,
+      "prompt": "exciting gameplay footage. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "gaming",
+      "metrics": {
+        "motion": 265,
+        "cuts_per_min": 49,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 1,
+      "prompt": "exciting gameplay footage. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "gaming",
+      "metrics": {
+        "motion": 265,
+        "cuts_per_min": 49,
+        "approach": "text-driven"
+      }
+    }
+  ],
+  "cluster_2": [
+    {
+      "cluster_id": 2,
+      "prompt": "engaging short-form content. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "storytime",
+      "metrics": {
+        "motion": 323,
+        "cuts_per_min": 67,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 2,
+      "prompt": "engaging short-form content. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "storytime",
+      "metrics": {
+        "motion": 323,
+        "cuts_per_min": 67,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 2,
+      "prompt": "engaging short-form content. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "storytime",
+      "metrics": {
+        "motion": 323,
+        "cuts_per_min": 67,
+        "approach": "motion-focused"
+      }
+    }
+  ],
+  "cluster_3": [
+    {
+      "cluster_id": 3,
+      "prompt": "exploring a beautiful destination. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "travel",
+      "metrics": {
+        "motion": 342,
+        "cuts_per_min": 68,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 3,
+      "prompt": "exploring a beautiful destination. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "travel",
+      "metrics": {
+        "motion": 342,
+        "cuts_per_min": 68,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 3,
+      "prompt": "exploring a beautiful destination. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "travel",
+      "metrics": {
+        "motion": 342,
+        "cuts_per_min": 68,
+        "approach": "motion-focused"
+      }
+    }
+  ],
+  "cluster_4": [
+    {
+      "cluster_id": 4,
+      "prompt": "an educational explanation. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "educational",
+      "metrics": {
+        "motion": 252,
+        "cuts_per_min": 50,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 4,
+      "prompt": "an educational explanation. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "educational",
+      "metrics": {
+        "motion": 252,
+        "cuts_per_min": 50,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 4,
+      "prompt": "an educational explanation. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "educational",
+      "metrics": {
+        "motion": 252,
+        "cuts_per_min": 50,
+        "approach": "text-driven"
+      }
+    }
+  ],
+  "cluster_5": [
+    {
+      "cluster_id": 5,
+      "prompt": "someone attempting a challenge. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "challenge",
+      "metrics": {
+        "motion": 199,
+        "cuts_per_min": 36,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 5,
+      "prompt": "someone attempting a challenge. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "challenge",
+      "metrics": {
+        "motion": 199,
+        "cuts_per_min": 36,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 5,
+      "prompt": "someone attempting a challenge. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "challenge",
+      "metrics": {
+        "motion": 199,
+        "cuts_per_min": 36,
+        "approach": "text-driven"
+      }
+    }
+  ],
+  "cluster_6": [
+    {
+      "cluster_id": 6,
+      "prompt": "a reaction video with commentary. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "reaction",
+      "metrics": {
+        "motion": 331,
+        "cuts_per_min": 69,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 6,
+      "prompt": "a reaction video with commentary. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "reaction",
+      "metrics": {
+        "motion": 331,
+        "cuts_per_min": 69,
+        "approach": "motion-focused"
+      }
+    },
+    {
+      "cluster_id": 6,
+      "prompt": "a reaction video with commentary. Shot with dynamic handheld camera with active movement, fast-paced editing with quick cuts, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "reaction",
+      "metrics": {
+        "motion": 331,
+        "cuts_per_min": 69,
+        "approach": "motion-focused"
+      }
+    }
+  ],
+  "cluster_7": [
+    {
+      "cluster_id": 7,
+      "prompt": "an educational explanation. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "educational",
+      "metrics": {
+        "motion": 309,
+        "cuts_per_min": 58,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 7,
+      "prompt": "an educational explanation. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "educational",
+      "metrics": {
+        "motion": 309,
+        "cuts_per_min": 58,
+        "approach": "text-driven"
+      }
+    },
+    {
+      "cluster_id": 7,
+      "prompt": "an educational explanation. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "educational",
+      "metrics": {
+        "motion": 309,
+        "cuts_per_min": 58,
+        "approach": "text-driven"
+      }
+    }
+  ],
+  "cluster_8": [
+    {
+      "cluster_id": 8,
+      "prompt": "a fashion outfit showcase. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "fashion",
+      "metrics": {
+        "motion": 257,
+        "cuts_per_min": 49,
+        "approach": "image-conditioned"
+      }
+    },
+    {
+      "cluster_id": 8,
+      "prompt": "a fashion outfit showcase. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "fashion",
+      "metrics": {
+        "motion": 257,
+        "cuts_per_min": 49,
+        "approach": "image-conditioned"
+      }
+    },
+    {
+      "cluster_id": 8,
+      "prompt": "a fashion outfit showcase. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "fashion",
+      "metrics": {
+        "motion": 257,
+        "cuts_per_min": 49,
+        "approach": "image-conditioned"
+      }
+    }
+  ],
+  "cluster_9": [
+    {
+      "cluster_id": 9,
+      "prompt": "a funny meme or viral moment. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "meme",
+      "metrics": {
+        "motion": 249,
+        "cuts_per_min": 46,
+        "approach": "image-conditioned"
+      }
+    },
+    {
+      "cluster_id": 9,
+      "prompt": "a funny meme or viral moment. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "meme",
+      "metrics": {
+        "motion": 249,
+        "cuts_per_min": 46,
+        "approach": "image-conditioned"
+      }
+    },
+    {
+      "cluster_id": 9,
+      "prompt": "a funny meme or viral moment. Shot with dynamic handheld camera with active movement, moderate pacing, clean, minimal visuals, calm, subdued tone. Vertical 1080x1920 format optimized for social media shorts. Professional production quality. Duration: 15-20 seconds.",
+      "category": "meme",
+      "metrics": {
+        "motion": 249,
+        "cuts_per_min": 46,
+        "approach": "image-conditioned"
+      }
+    }
+  ]
+}

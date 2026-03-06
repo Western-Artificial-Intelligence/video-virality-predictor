@@ -341,6 +341,7 @@ function ForecastCard({ title, value, confidence, progress, rangeLabel }) {
 export default function App() {
   const [schema, setSchema] = useState(null);
   const [mode, setMode] = useState('fast');
+  const [modeInfoOpen, setModeInfoOpen] = useState(false);
   const [metadata, setMetadata] = useState({});
   const [videoFile, setVideoFile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -396,6 +397,17 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!modeInfoOpen) return undefined;
+    function onKeydown(event) {
+      if (event.key === 'Escape') {
+        setModeInfoOpen(false);
+      }
+    }
+    window.addEventListener('keydown', onKeydown);
+    return () => window.removeEventListener('keydown', onKeydown);
+  }, [modeInfoOpen]);
 
   const allFields = useMemo(() => schema?.fields || [], [schema]);
   const fieldMap = useMemo(() => {
@@ -676,7 +688,17 @@ export default function App() {
           </div>
           <div className="vp-mode-box">
             <label>
-              <span>Mode</span>
+              <div className="vp-mode-head">
+                <span>Mode</span>
+                <button
+                  type="button"
+                  className="vp-info-btn"
+                  aria-label="Explain Fast and Full mode"
+                  onClick={() => setModeInfoOpen(true)}
+                >
+                  i
+                </button>
+              </div>
               <select value={mode} onChange={(e) => setMode(e.target.value)}>
                 {(schema?.modes || ['fast', 'full']).map((m) => (
                   <option key={m} value={m}>
@@ -943,6 +965,46 @@ export default function App() {
               ) : null}
             </aside>
           </form>
+        ) : null}
+
+        {modeInfoOpen ? (
+          <div className="vp-modal-backdrop" role="presentation" onClick={() => setModeInfoOpen(false)}>
+            <section
+              className="vp-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="vp-mode-info-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="vp-modal-head">
+                <h3 id="vp-mode-info-title">Fast vs Full mode</h3>
+                <button type="button" className="vp-modal-close" onClick={() => setModeInfoOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <div className="vp-modal-body">
+                <h4>Fast mode</h4>
+                <p>
+                  Uses one lightweight model setup and returns a single prediction for 7-day and 30-day views.
+                  Choose this when you want a quicker result.
+                </p>
+
+                <h4>Full mode</h4>
+                <p>
+                  Runs multiple model types and shows each model's prediction, plus a safer overall range.
+                  Choose this when you want a more cautious estimate.
+                </p>
+
+                <h4>How the full-mode range is computed</h4>
+                <ul>
+                  <li>We sort model predictions and reduce the impact of extreme outliers.</li>
+                  <li>We focus on the middle predictions, then add extra padding on both sides.</li>
+                  <li>This creates a more stable range that is less likely to overreact to one model.</li>
+                  <li>The final range is converted back to normal view counts and never goes below 0.</li>
+                </ul>
+              </div>
+            </section>
+          </div>
         ) : null}
       </div>
     </div>

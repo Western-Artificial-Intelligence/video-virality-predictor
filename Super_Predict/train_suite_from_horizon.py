@@ -438,7 +438,7 @@ def load_sharded_vectors(
         mf = mf.sort_values("captured_at")
     mf = mf.drop_duplicates(subset=["video_id"], keep="last").reset_index(drop=True)
 
-    shard_cache: Dict[str, np.lib.npyio.NpzFile] = {}
+    shard_cache: Dict[str, np.ndarray] = {}
     emb_cache: Dict[str, np.ndarray] = {}
     download_root = Path(download_root)
     download_root.mkdir(parents=True, exist_ok=True)
@@ -453,9 +453,10 @@ def load_sharded_vectors(
             local.parent.mkdir(parents=True, exist_ok=True)
             if not local.exists():
                 s3.download_file(key, local)
-            shard_cache[key] = np.load(local, allow_pickle=True)
-        shard = shard_cache[key]
-        arr = np.asarray(shard["vectors"][idx], dtype=np.float32).reshape(-1)
+            with np.load(local, allow_pickle=False) as shard:
+                shard_cache[key] = np.asarray(shard["vectors"], dtype=np.float32)
+        vectors = shard_cache[key]
+        arr = np.asarray(vectors[idx], dtype=np.float32).reshape(-1)
         return arr
 
     def fetch_emb_vec(key: str) -> np.ndarray:
@@ -465,7 +466,7 @@ def load_sharded_vectors(
         local.parent.mkdir(parents=True, exist_ok=True)
         if not local.exists():
             s3.download_file(key, local)
-        vec = np.asarray(np.load(local, allow_pickle=True), dtype=np.float32).reshape(-1)
+        vec = np.asarray(np.load(local, allow_pickle=False), dtype=np.float32).reshape(-1)
         emb_cache[key] = vec
         return vec
 
@@ -546,12 +547,6 @@ def load_sharded_vectors(
         video_arr = np.zeros((n, 0), dtype=np.float32)
         audio_arr = np.zeros((n, 0), dtype=np.float32)
         text_arr = np.zeros((n, 0), dtype=np.float32)
-
-    for shard in shard_cache.values():
-        try:
-            shard.close()
-        except Exception:
-            pass
 
     out_df = pd.DataFrame(rows)
     return (

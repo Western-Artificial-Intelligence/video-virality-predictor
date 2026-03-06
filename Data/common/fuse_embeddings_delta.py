@@ -263,7 +263,7 @@ def main() -> None:
     parser.add_argument("--append_text_presence_mask", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--terminal_text_statuses",
-        default="no_captions,fail_empty_transcript_terminal",
+        default="no_captions,fail_empty_transcript_terminal,fail_empty_transcript",
     )
     parser.add_argument("--max_fail_retries", type=int, default=DEFAULT_MAX_FAIL_RETRIES)
     parser.add_argument("--sample_ids_per_status", type=int, default=DEFAULT_SAMPLE_IDS)

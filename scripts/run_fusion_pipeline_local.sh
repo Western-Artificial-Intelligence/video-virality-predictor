@@ -32,7 +32,7 @@ METADATA_CSV="${METADATA_CSV:-Data/raw/Metadata/shorts_metadata_horizon.csv}"
 EMB_PREFIX="${EMB_PREFIX:-clipfarm/embeddings}"
 FUSED_PREFIX_BASE="${FUSED_PREFIX_BASE:-clipfarm/fused}"
 TEXT_STATE_S3_KEY="${TEXT_STATE_S3_KEY:-clipfarm/state/text_downloader.sqlite}"
-TERMINAL_TEXT_STATUSES="${TERMINAL_TEXT_STATUSES:-no_captions,fail_empty_transcript_terminal}"
+TERMINAL_TEXT_STATUSES="${TERMINAL_TEXT_STATUSES:-no_captions,fail_empty_transcript_terminal,fail_empty_transcript}"
 TEXT_DIM="${TEXT_DIM:-768}"
 MAX_FAIL_RETRIES="${MAX_FAIL_RETRIES:-3}"
 SAMPLE_IDS_PER_STATUS="${SAMPLE_IDS_PER_STATUS:-10}"
@@ -130,4 +130,3 @@ for raw_strategy in "${strategy_arr[@]}"; do
 done
 
 echo "[done] fusion pipeline completed"
-

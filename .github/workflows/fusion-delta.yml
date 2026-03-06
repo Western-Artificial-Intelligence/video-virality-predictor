@@ -24,7 +24,7 @@ env:
   EMB_PREFIX: clipfarm/embeddings
   FUSED_PREFIX_BASE: clipfarm/fused
   TEXT_STATE_S3_KEY: clipfarm/state/text_downloader.sqlite
-  TERMINAL_TEXT_STATUSES: no_captions,fail_empty_transcript_terminal
+  TERMINAL_TEXT_STATUSES: no_captions,fail_empty_transcript_terminal,fail_empty_transcript
   TEXT_DIM: "768"
   MAX_FAIL_RETRIES: "3"
   SAMPLE_IDS_PER_STATUS: "10"

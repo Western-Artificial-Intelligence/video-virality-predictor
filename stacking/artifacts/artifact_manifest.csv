@@ -1,0 +1,16 @@
+generated_at,path
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/val_weights_by_horizon.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/range_metrics_summary.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/best_comparison_summary.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h7_base_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h7_deterministic_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h7_stack_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h7_all_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h7_range_rows.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h7_stack_oof_predictions.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h30_base_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h30_deterministic_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h30_stack_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h30_all_leaderboard.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h30_range_rows.csv
+2026-03-06T23:48:16.367643Z,/Users/wkdghdus/Desktop/coding/clipfarm/video-virality-predictor/stacking/artifacts/h30_stack_oof_predictions.csv

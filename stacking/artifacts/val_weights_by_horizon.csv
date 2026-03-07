@@ -1,0 +1,9 @@
+horizon,base_col,weight
+7,concat_mlp__max_pool,0.2559454101032215
+7,gated_fusion_mlp__concat,0.23202201895185293
+7,gbdt__concat,0.2819157785943474
+7,ridge__sum_pool,0.2301167923505782
+30,concat_mlp__max_pool,0.23042914003989018
+30,gated_fusion_mlp__concat,0.21737135508699845
+30,gbdt__concat,0.35363804353813993
+30,ridge__sum_pool,0.1985614613349715
